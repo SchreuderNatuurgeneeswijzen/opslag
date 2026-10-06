@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.7.0
+Stable tag: 1.7.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,21 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.7.1 =
+* Locatie van een kassa-order wordt bepaald uit het register-ID (`_yith_pos_register`) met exacte vergelijking. Vul bij de instellingen per locatie het register-ID in (niet het store-ID, dat is voor alle kassa's gelijk). Er wordt niet meer op delen van tekst gegokt.
+* Verkopen van de extra kassa of een onbekende kassa (bijv. een testkassa) komen onder "Kassaverkopen zonder locatie" in het controlescherm. Pas na het kiezen van Baarn, Haarlem of Zwolle worden ze besteld. Dezelfde keuze wordt voor de locatievoorraad gebruikt en kan niet meer worden gewijzigd.
+* Gewone webshoporders tellen nooit als fysieke kassaverkoop, ook niet wanneer ze zijn afgerond. Ze zijn alleen informatief (Baarn).
+* Gedeeltelijk geretourneerde aantallen worden van de kassaverkoop afgetrokken.
+* Definitief verzenden is vergrendeld per locatie (geen dubbele mails bij dubbelklik of herhaalde aanvraag). Na verzending wordt de controle direct ongeldig; mislukte markering van orders wordt gemeld in plaats van een foutmelding.
+* Het Excel-bestand wordt niet meer gemaakt wanneer een product met aantal > 0 er niet in kan worden gezet; de melding noemt de SKU's. Nieuwe numerieke SKU's worden als getal weggeschreven.
+* Het werkblad Verdeling is schema-correct (dimension vóór sheetData) en het eerste werkblad opent weer bovenaan.
+* Oude concepten (ook uit v1.6.x) kunnen geen turflijstproduct meer in de Planner brengen. Bij een hersteld handmatig aantal waarvan de kassaverkoop sindsdien is veranderd, verschijnt een waarschuwing.
+* SKU-sleutels worden bij handmatig toevoegen en bij het opslaan van aantallen overal genormaliseerd.
+* Handmatig toevoegen toont de nieuwe regel alleen nog in de bestellijst (niet meer in de Planner- en adviestabel).
+* HPOS-compatibiliteit gedeclareerd; orderlinks in het voorraadlog werken met HPOS.
+* POS-herkenning strakker: `_yith_pos_order`/`_yith_pos_register` en meta die met `yith_pos_` begint; geen valse treffers meer op bijvoorbeeld "deposit".
+* Niet gewijzigd (volgt in 1.8.0): atomaire voorraadboeking, startmoment locatievoorraad, voorraadscherm, gedeeltelijke retouren in locatievoorraad.
 
 = 1.7.0 =
 * Locatievoorraad toegevoegd binnen dezelfde Bonusan POS-plugin voor Baarn, Haarlem en Zwolle.
