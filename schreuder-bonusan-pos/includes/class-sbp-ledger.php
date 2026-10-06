@@ -24,7 +24,7 @@ class SBP_Ledger_Exception extends Exception {
 class SBP_Ledger_Retry extends Exception {}
 
 final class SBP_Ledger {
-    const DB_VERSION = '1.8.0';
+    const DB_VERSION = '1.9.0';
     /** Markering (kolom transfer_id) op regels die uit het oude optie-logboek zijn overgenomen. */
     const LEGACY_TAG = 'legacy-1.7.0';
     /** Redenen die meetellen voor "hoeveel van deze order is geboekt". */
@@ -40,12 +40,34 @@ final class SBP_Ledger {
     public static function stock_table() { global $wpdb; return $wpdb->prefix . 'sbp_stock'; }
     public static function ledger_table() { global $wpdb; return $wpdb->prefix . 'sbp_stock_ledger'; }
 
+    public static function inbound_table() { global $wpdb; return $wpdb->prefix . 'sbp_inbound'; }
+
     public static function schema_statements() {
         global $wpdb;
         $charset = $wpdb->get_charset_collate();
         $stock = self::stock_table();
         $ledger = self::ledger_table();
+        $inbound = self::inbound_table();
         return array(
+            "CREATE TABLE $inbound (
+  id bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+  shipment varchar(40) NOT NULL,
+  created_gmt datetime NOT NULL,
+  closed_gmt datetime NULL,
+  location varchar(20) NOT NULL,
+  product_id bigint(20) unsigned NOT NULL,
+  sku varchar(100) NOT NULL DEFAULT '',
+  product_name varchar(255) NOT NULL DEFAULT '',
+  qty_ordered decimal(14,3) NOT NULL,
+  qty_received decimal(14,3) NOT NULL DEFAULT 0,
+  qty_cancelled decimal(14,3) NOT NULL DEFAULT 0,
+  subject varchar(255) NOT NULL DEFAULT '',
+  note text NULL,
+  user_id bigint(20) unsigned NOT NULL DEFAULT 0,
+  PRIMARY KEY  (id),
+  KEY shipment (shipment),
+  KEY open_lines (closed_gmt,location,product_id)
+) $charset",
             "CREATE TABLE $stock (
   product_id bigint(20) unsigned NOT NULL,
   location varchar(20) NOT NULL,
@@ -340,6 +362,85 @@ final class SBP_Ledger {
         global $wpdb;
         $t = self::ledger_table();
         $wpdb->query( $wpdb->prepare( "DELETE FROM $t WHERE transfer_id = %s", self::LEGACY_TAG ) );
+    }
+
+    /* ---------- onderweg (verzonden Bonusan-bestellingen) ---------- */
+
+    /** Legt een verzonden bestelling vast als "onderweg" (alleen gevolgde producten). Geen voorraadmutatie. */
+    public static function create_shipment( $shipment, $location, array $lines, $subject, $user_id, $note = '' ) {
+        global $wpdb;
+        return self::tx( function () use ( $wpdb, $shipment, $location, $lines, $subject, $user_id, $note ) {
+            $t = self::inbound_table();
+            foreach ( $lines as $l ) {
+                self::q( $wpdb->prepare(
+                    "INSERT INTO $t (shipment, created_gmt, location, product_id, sku, product_name, qty_ordered, subject, note, user_id) VALUES (%s, %s, %s, %d, %s, %s, %f, %s, %s, %d)",
+                    $shipment, gmdate( 'Y-m-d H:i:s' ), $location, (int)$l['product_id'], substr( (string)$l['sku'], 0, 100 ), substr( (string)$l['name'], 0, 255 ),
+                    round( (float)$l['qty'], 3 ), substr( (string)$subject, 0, 255 ), (string)$note, $user_id
+                ) );
+            }
+            return count( $lines );
+        } );
+    }
+
+    /** Openstaande (nog niet volledig afgehandelde) regels, oudste zending eerst. */
+    public static function open_lines() {
+        global $wpdb;
+        $t = self::inbound_table();
+        return (array) $wpdb->get_results( "SELECT * FROM $t WHERE closed_gmt IS NULL ORDER BY created_gmt ASC, id ASC", ARRAY_A );
+    }
+
+    /** Wat is er nog onderweg? product_id => location => aantal. */
+    public static function in_transit( array $product_ids ) {
+        global $wpdb;
+        $t = self::inbound_table();
+        $ids = array_values( array_unique( array_map( 'intval', $product_ids ) ) );
+        $out = array();
+        if ( ! $ids ) { return $out; }
+        $rows = $wpdb->get_results( "SELECT product_id, location, SUM(qty_ordered - qty_received - qty_cancelled) AS open_qty FROM $t WHERE closed_gmt IS NULL AND product_id IN (" . implode( ',', $ids ) . ') GROUP BY product_id, location', ARRAY_A );
+        foreach ( (array)$rows as $r ) {
+            $q = round( (float)$r['open_qty'], 3 );
+            if ( $q > 0 ) { $out[(int)$r['product_id']][$r['location']] = $q; }
+        }
+        return $out;
+    }
+
+    /**
+     * Verwerkt een levering voor één regel: $receive stuks komen op de voorraad, $cancel stuks vervallen
+     * (niet leverbaar). Wat overblijft blijft onderweg (nalevering). $expected_open moet overeenkomen met
+     * wat nu openstaat, zodat dubbel klikken of een tweede gebruiker nooit dubbel boekt.
+     */
+    public static function receive_line( $line_id, $receive, $cancel, $expected_open, $user_id ) {
+        global $wpdb;
+        return self::tx( function () use ( $wpdb, $line_id, $receive, $cancel, $expected_open, $user_id ) {
+            $t = self::inbound_table();
+            $row = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM $t WHERE id = %d FOR UPDATE", $line_id ), ARRAY_A );
+            if ( null === $row ) {
+                if ( '' !== (string) $wpdb->last_error ) { throw new SBP_Ledger_Retry( (string) $wpdb->last_error ); }
+                throw new SBP_Ledger_Exception( 'missing', 'Regel niet gevonden.' );
+            }
+            if ( null !== $row['closed_gmt'] ) { throw new SBP_Ledger_Exception( 'closed', 'Deze regel is al afgehandeld.' ); }
+            $open = round( (float)$row['qty_ordered'] - (float)$row['qty_received'] - (float)$row['qty_cancelled'], 3 );
+            if ( abs( $open - round( (float)$expected_open, 3 ) ) > 0.0005 ) { throw new SBP_Ledger_Exception( 'conflict', 'Er staat nu ' . $open . ' onderweg (was ' . $expected_open . ').' ); }
+            $receive = round( (float)$receive, 3 ); $cancel = round( (float)$cancel, 3 );
+            if ( $receive < 0 || $cancel < 0 || $receive + $cancel > $open + 0.0005 ) { throw new SBP_Ledger_Exception( 'invalid', 'Ontvangen plus niet leverbaar is meer dan er onderweg is (' . $open . ').' ); }
+            $pid = (int)$row['product_id']; $loc = (string)$row['location'];
+            if ( $receive > 0 ) {
+                $before = self::lock_row( $pid, $loc );
+                $after = round( $before + $receive, 3 );
+                self::write_qty( $pid, $loc, $after );
+                self::insert_ledger( array(
+                    'product_id' => $pid, 'sku' => $row['sku'], 'product_name' => $row['product_name'], 'location' => $loc,
+                    'delta' => $receive, 'before_qty' => $before, 'after_qty' => $after, 'reason' => 'delivery_in',
+                    'transfer_id' => (string)$row['shipment'], 'note' => 'Levering Bonusan ontvangen', 'user_id' => $user_id,
+                ) );
+            }
+            $new_open = round( $open - $receive - $cancel, 3 );
+            self::q( $wpdb->prepare(
+                "UPDATE $t SET qty_received = qty_received + %f, qty_cancelled = qty_cancelled + %f, closed_gmt = " . ( $new_open <= 0.0005 ? $wpdb->prepare( '%s', gmdate( 'Y-m-d H:i:s' ) ) : 'NULL' ) . ' WHERE id = %d',
+                $receive, $cancel, $line_id
+            ) );
+            return array( 'received' => $receive, 'cancelled' => $cancel, 'open_after' => max( 0.0, $new_open ) );
+        } );
     }
 
     /** Eenmalige import van een regel uit het oude optie-logboek (v1.7.0). Wijzigt het saldo niet. */

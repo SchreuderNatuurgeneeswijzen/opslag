@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.8.1
+Stable tag: 1.9.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,15 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.9.0 =
+* Verzonden Bonusan-bestellingen zijn nu de basis voor de voorraad. Na definitief verzenden worden de gevolgde producten uit de bestelling (aantal > 0) als "onderweg" naar die locatie vastgelegd. De voorraad verandert dan nog niet.
+* Bij Locatievoorraad staat een kaart "Onderweg – bestellingen bij Bonusan". Klopt de levering, klik dan op Akkoord: de bestelde aantallen komen op de voorraad van die locatie. Afwijkingen geef je per regel aan: ontvangen zoals besteld, deels ontvangen (rest volgt als nalevering), deels ontvangen (rest niet leverbaar), nog niets ontvangen (blijft onderweg) of niet leverbaar. Niet aangepaste regels worden als ontvangen zoals besteld verwerkt.
+* Wat onderweg is telt mee in het aanvuladvies, zodat je niet dubbel bestelt. Het advies toont een kolom "Onderweg B/H/Z".
+* Verwerken is veilig bij dubbel klikken of twee gebruikers: een regel kan maar één keer worden afgehandeld en een verouderd scherm geeft een melding in plaats van een dubbele boeking. Ieder ontvangen aantal staat in het voorraadlogboek als "Levering Bonusan ontvangen".
+* Alleen producten die je bij Locatievoorraad volgt worden onderweg gezet; andere regels van de bestelling blijven buiten de voorraad.
+* Bij een herverzending van reeds verzonden orders ontstaat ook een zending; vervalt die, zet de regels dan op niet leverbaar.
+* Nieuwe tabel `sbp_inbound` (wordt bij de update aangemaakt).
 
 = 1.8.1 =
 * Aanvulwijze per gevolgd product. Alleen producten die Bonusan niet kan leveren (in de webshop verborgen en niet op de turflijst) worden vanuit Baarn naar Haarlem en Zwolle aangevuld, met extern aanvuladvies voor Baarn. Alle andere gevolgde producten bestellen Haarlem en Zwolle zelf bij Bonusan via de turflijst; daarvoor toont het advies alleen hoeveel die locatie zelf moet bestellen en er komt geen transferadvies.
