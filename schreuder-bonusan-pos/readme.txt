@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.7.1
+Stable tag: 1.8.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,19 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.8.0 =
+* Locatievoorraad volledig herbouwd op een eigen grootboek (tabellen `sbp_stock` en `sbp_stock_ledger`). Iedere mutatie is één database-transactie met vergrendelde voorraadrij: gelijktijdige kassaverkopen kunnen elkaar niet meer overschrijven en het saldo is altijd gelijk aan beginsaldo plus de som van het logboek.
+* Orderboekingen zijn idempotent: per order en product wordt alleen het verschil tussen "gewenst" en "al geboekt" verwerkt. Meerdere hooks of opslagen van dezelfde order geven nooit een dubbele boeking; een mislukte boeking wordt na een minuut automatisch opnieuw geprobeerd.
+* Order wijzigen na boeking (aantal, regel erbij/eraf), gedeeltelijke retour, volledige retour/annulering, naar de prullenbak verplaatsen of verwijderen: de voorraad volgt de order. (Teruggeboekte aantallen gaan terug naar de locatie van de verkoop.)
+* Startmoment per product (UTC) in plaats van één globaal moment: verkopen van vóór het volgen van een product worden nooit afgeboekt, ook niet als de order later wordt bewerkt of afgerond. Hiermee is ook de tijdzonefout van v1.7.0 verholpen.
+* Interne transfers zijn atomair, mogen nooit meer dan de bronvoorraad zijn en delen een transfer-ID in beide logregels. Handmatige uitboekingen kunnen de voorraad niet onder 0 brengen (verkopen wel: dat is de fysieke werkelijkheid).
+* Voorraadscherm: alleen gewijzigde velden worden opgeslagen. Een gewijzigd voorraadgetal wordt alleen verwerkt als de voorraad sinds het laden van de pagina niet is veranderd; anders volgt een melding en wordt niets overschreven.
+* Voorraadlogboek met datum, product-ID, SKU, productnaam, locatie, mutatie, voor/na, reden, order, notitie en gebruiker; filter per product en CSV-export van de volledige historie. Het oude optie-logboek (maximaal 2000 regels) wordt bij de update overgenomen.
+* Verkooptempo komt uit het grootboek (netto: verkopen min retouren), wordt gecorrigeerd voor de periode waarover echt gegevens zijn en wordt onder 14 dagen niet gebruikt voor het slimme doeladvies.
+* Foutmeldingen in het voorraadscherm worden nu getoond.
+* Adminmeldingen (minimumvoorraad, kassaverkopen zonder locatie) worden 5 minuten gecachet en vertragen niet meer iedere beheerpagina.
+* Bij de update krijgen reeds gevolgde producten een startmoment, en bestaande v1.7.0-boekingen worden niet opnieuw afgeboekt.
 
 = 1.7.1 =
 * Locatie van een kassa-order wordt bepaald uit het register-ID (`_yith_pos_register`) met exacte vergelijking. Vul bij de instellingen per locatie het register-ID in (niet het store-ID, dat is voor alle kassa's gelijk). Er wordt niet meer op delen van tekst gegokt.
