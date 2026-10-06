@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.8.0
+ * Version: 1.8.1
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.8.0';
+    const VERSION = '1.8.1';
 
     private static $instance = null;
 
@@ -56,6 +56,7 @@ final class Schreuder_Bonusan_POS {
         add_action( 'wp_ajax_sbp_stock_add_product', array( $this, 'ajax_stock_add_product' ) );
         add_action( 'wp_ajax_sbp_stock_save', array( $this, 'ajax_stock_save' ) );
         add_action( 'wp_ajax_sbp_stock_remove_product', array( $this, 'ajax_stock_remove_product' ) );
+        add_action( 'wp_ajax_sbp_stock_mode', array( $this, 'ajax_stock_mode' ) );
         add_action( 'wp_ajax_sbp_stock_adjust', array( $this, 'ajax_stock_adjust' ) );
         add_action( 'wp_ajax_sbp_stock_transfer', array( $this, 'ajax_stock_transfer' ) );
         add_action( 'wp_ajax_sbp_assign_order_location', array( $this, 'ajax_assign_order_location' ) );
@@ -248,7 +249,7 @@ final class Schreuder_Bonusan_POS {
                     if(d.stock_advice && d.stock_advice.length){
                         html+='<div class="sbp-addbox"><strong>Locatievoorraad – aanvuladvies</strong><p class="description">Baarn is de hoofdvoorraad voor de producten die je onder Locatievoorraad volgt. Haarlem en Zwolle worden eerst vanuit Baarn aangevuld. Extern aanvullen is alleen een advies; jij bepaalt het uiteindelijke bestelaantal.</p>';
                         html+='<table class="sbp-table"><thead><tr><th>Product</th><th>Baarn</th><th>Haarlem</th><th>Zwolle</th><th>Intern aanvullen</th><th>Extern advies</th><th>Route</th></tr></thead><tbody>';
-                        d.stock_advice.forEach(function(x){let internal=[];if(Number(x.to_haarlem)>0)internal.push(x.to_haarlem+' → Haarlem');if(Number(x.to_zwolle)>0)internal.push(x.to_zwolle+' → Zwolle');html+='<tr><td>'+esc(x.name)+'<br><small>SKU '+esc(x.sku||'—')+'</small></td><td>'+esc(x.baarn)+'</td><td>'+esc(x.haarlem)+'</td><td>'+esc(x.zwolle)+'</td><td>'+esc(internal.join(', ')||'—')+'</td><td><strong>'+esc(x.external_need||0)+'</strong></td><td>'+esc(x.route_label)+'</td></tr>';});
+                        d.stock_advice.forEach(function(x){let internal=[];if(x.mode==='direct'&&Number(x.own_need_here)>0)internal.push('Zelf bestellen via Bonusan: '+x.own_need_here);if(Number(x.to_haarlem)>0)internal.push(x.to_haarlem+' → Haarlem');if(Number(x.to_zwolle)>0)internal.push(x.to_zwolle+' → Zwolle');html+='<tr><td>'+esc(x.name)+'<br><small>SKU '+esc(x.sku||'—')+'</small></td><td>'+esc(x.baarn)+'</td><td>'+esc(x.haarlem)+'</td><td>'+esc(x.zwolle)+'</td><td>'+esc(internal.join(', ')||'—')+'</td><td><strong>'+esc(x.external_need||0)+'</strong></td><td>'+esc(x.route_label)+'</td></tr>';});
                         html+='</tbody></table><p><a class="button" href="<?php echo esc_js( admin_url('admin.php?page=schreuder-bonusan-stock') ); ?>">Locatievoorraad openen</a></p></div>';
                     }
                     // Planner-overzicht altijd tonen, ook wanneer er op dit moment geen regels zijn.
@@ -1847,14 +1848,52 @@ final class Schreuder_Bonusan_POS {
         return false;
     }
 
+    /** Is dit product in de webshop verborgen (zichtbaarheid "Verborgen")? Bij een variatie telt het hoofdproduct. */
+    private function is_hidden_product( $product ) {
+        if ( ! $product ) { return false; }
+        $p = $product;
+        if ( $product->is_type( 'variation' ) && $product->get_parent_id() ) {
+            $parent = wc_get_product( $product->get_parent_id() );
+            if ( $parent ) { $p = $parent; }
+        }
+        return 'hidden' === $p->get_catalog_visibility();
+    }
+
+    /**
+     * Hoe wordt dit product aangevuld?
+     * - 'transfer': Baarn is de hoofdvoorraad; Haarlem en Zwolle worden vanuit Baarn aangevuld en
+     *   Baarn zelf extern (planner/leverancier). Geldt voor producten die Bonusan niet kan leveren:
+     *   verborgen in de webshop en niet op de turflijst.
+     * - 'direct': iedere locatie bestelt zelf bij Bonusan via de turflijst; er is geen transfer van Baarn.
+     * Standaard automatisch; per product te overschrijven (meta _sbp_loc_mode).
+     */
+    private function stock_mode( $product ) {
+        $v = get_post_meta( (int)$product->get_id(), '_sbp_loc_mode', true );
+        if ( in_array( $v, array( 'transfer', 'direct' ), true ) ) { return $v; }
+        return ( $this->is_hidden_product( $product ) && ! $this->is_any_turflist_product( $product ) ) ? 'transfer' : 'direct';
+    }
+
     private function stock_advice_for_product( $product_id ) {
         $product = wc_get_product( (int)$product_id );
         if ( ! $product ) { return null; }
         $s = $this->get_stock_state( $product_id );
-        $h_need = ( $s['haarlem_target'] > 0 && $s['haarlem'] <= $s['haarlem_min'] ) ? max( 0, $s['haarlem_target'] - $s['haarlem'] ) : 0;
-        $z_need = ( $s['zwolle_target'] > 0 && $s['zwolle'] <= $s['zwolle_min'] ) ? max( 0, $s['zwolle_target'] - $s['zwolle'] ) : 0;
-        $baarn_after_transfers = $s['baarn'] - $h_need - $z_need;
-        $external_need = ( $s['baarn_target'] > 0 && $baarn_after_transfers <= $s['baarn_min'] ) ? max( 0, $s['baarn_target'] - $baarn_after_transfers ) : 0;
+        $mode = $this->stock_mode( $product );
+        $need = array();
+        foreach ( $this->stock_locations() as $loc => $label ) {
+            $need[$loc] = ( $s[$loc.'_target'] > 0 && $s[$loc] <= $s[$loc.'_min'] ) ? max( 0, $s[$loc.'_target'] - $s[$loc] ) : 0;
+        }
+        if ( 'transfer' === $mode ) {
+            $h_need = $need['haarlem']; $z_need = $need['zwolle'];
+            $baarn_after_transfers = $s['baarn'] - $h_need - $z_need;
+            $external_need = ( $s['baarn_target'] > 0 && $baarn_after_transfers <= $s['baarn_min'] ) ? max( 0, $s['baarn_target'] - $baarn_after_transfers ) : 0;
+            $own_need = array( 'baarn' => 0, 'haarlem' => 0, 'zwolle' => 0 );
+        } else {
+            // Iedere locatie bestelt zelf bij Bonusan: geen transfer vanuit Baarn.
+            $h_need = 0; $z_need = 0;
+            $baarn_after_transfers = $s['baarn'];
+            $external_need = 0;
+            $own_need = $need;
+        }
 
         // Verkooptempo komt uit het eigen grootboek en bestaat dus pas vanaf het moment dat dit
         // product wordt gevolgd. Het maandvolume wordt gecorrigeerd voor de periode waarover echt
@@ -1883,6 +1922,8 @@ final class Schreuder_Bonusan_POS {
             'route_label' => $turf ? 'Bonusan-turflijst' : 'Planner/overige leverancier',
             'velocity' => $velocity, 'smart_target' => $smart,
             'data_days' => $data_days, 'low_data' => $low_data,
+            'mode' => $mode, 'own_need' => $own_need,
+            'mode_label' => 'transfer' === $mode ? 'Vanuit Baarn (Bonusan levert niet)' : 'Eigen bestelling per locatie',
         ) );
     }
 
@@ -1894,7 +1935,7 @@ final class Schreuder_Bonusan_POS {
         foreach ( $products as $id => $product ) {
             $row = $this->stock_advice_for_product( $id );
             if ( ! $row ) { continue; }
-            if ( $alerts_only && $row['to_haarlem'] <= 0 && $row['to_zwolle'] <= 0 && $row['external_need'] <= 0 ) { continue; }
+            if ( $alerts_only && $row['to_haarlem'] <= 0 && $row['to_zwolle'] <= 0 && $row['external_need'] <= 0 && array_sum( $row['own_need'] ) <= 0 ) { continue; }
             $rows[] = $row;
         }
         return $rows;
@@ -1903,11 +1944,24 @@ final class Schreuder_Bonusan_POS {
     private function get_stock_preview_advice( $location ) {
         $rows = array();
         foreach ( $this->get_stock_advice_rows(true) as $row ) {
+            if ( 'direct' === $row['mode'] ) {
+                // Eigen bestelling: alleen tonen als deze locatie zelf iets nodig heeft.
+                $here = (float)( $row['own_need'][$location] ?? 0 );
+                if ( $here <= 0 ) { continue; }
+            } else {
+                // Aanvulling vanuit Baarn: Baarn ziet wat naar Haarlem/Zwolle moet en het externe advies;
+                // Haarlem en Zwolle zien alleen hun eigen ontvangst.
+                $here = 0.0;
+                if ( 'baarn' === $location ) {
+                    if ( $row['to_haarlem'] <= 0 && $row['to_zwolle'] <= 0 && $row['external_need'] <= 0 ) { continue; }
+                } elseif ( (float)$row[ 'to_' . $location ] <= 0 ) { continue; }
+            }
             $rows[] = array(
                 'product_id' => $row['product_id'], 'name' => $row['name'], 'sku' => $row['sku'],
                 'baarn' => $row['baarn'], 'haarlem' => $row['haarlem'], 'zwolle' => $row['zwolle'],
                 'to_haarlem' => $row['to_haarlem'], 'to_zwolle' => $row['to_zwolle'],
                 'external_need' => $row['external_need'], 'route' => $row['route'], 'route_label' => $row['route_label'],
+                'mode' => $row['mode'], 'own_need_here' => $here,
             );
         }
         return $rows;
@@ -1924,7 +1978,7 @@ final class Schreuder_Bonusan_POS {
         ?>
         <div class="wrap sbp-stock-wrap">
             <h1>Locatievoorraad</h1>
-            <p><strong>Baarn is de hoofdvoorraad</strong> voor de producten die je hier volgt. Haarlem en Zwolle hebben een kleinere werkvoorraad. Gewone webshopverkopen worden standaard van Baarn afgeboekt. Vaste POS-locaties worden automatisch herkend wanneer het YITH locatiekenmerk is ingesteld; een onbekende/extra kassa komt hieronder te staan totdat je de locatie kiest.</p>
+            <p><strong>Baarn is de hoofdvoorraad</strong> voor de producten die je hier volgt. Haarlem en Zwolle hebben een kleinere werkvoorraad. <strong>Alleen producten die Bonusan niet kan leveren (verborgen in de webshop) worden vanuit Baarn naar Haarlem en Zwolle aangevuld.</strong> Alle andere gevolgde producten bestellen Haarlem en Zwolle zelf bij Bonusan via de turflijst; daarvoor geeft het advies alleen aan hoeveel die locatie zelf moet bestellen. Je kunt de wijze per product aanpassen. Gewone webshopverkopen worden standaard van Baarn afgeboekt. Vaste POS-locaties worden automatisch herkend wanneer het YITH locatiekenmerk is ingesteld; een onbekende/extra kassa komt hieronder te staan totdat je de locatie kiest.</p>
             <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=schreuder-bonusan-pos')); ?>">← Bonusan bestelling</a></p>
 
             <?php if ( $pending ) : ?>
@@ -1955,7 +2009,7 @@ final class Schreuder_Bonusan_POS {
                 <form id="sbp-stock-form">
                     <div class="sbp-stock-scroll"><table class="widefat striped sbp-stock-table"><thead><tr><th rowspan="2">Product</th><th colspan="3">Baarn – hoofdvoorraad</th><th colspan="3">Haarlem</th><th colspan="3">Zwolle</th><th rowspan="2"></th></tr><tr><th>Nu</th><th>Min.</th><th>Gewenst</th><th>Nu</th><th>Min.</th><th>Gewenst</th><th>Nu</th><th>Min.</th><th>Gewenst</th></tr></thead><tbody>
                     <?php foreach ( $products as $id => $product ) : $st=$this->get_stock_state($id); ?>
-                    <tr data-product-id="<?php echo esc_attr($id); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
+                    <tr data-product-id="<?php echo esc_attr($id); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
                     <?php foreach(array('baarn','haarlem','zwolle') as $loc): ?>
                         <td><input class="small-text sbp-stock-number<?php echo $st[$loc] < 0 ? ' sbp-neg' : ''; ?>" type="number" step="any" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="stock" data-orig="<?php echo esc_attr($st[$loc]); ?>" value="<?php echo esc_attr($st[$loc]); ?>"></td>
                         <td><input class="small-text sbp-stock-number" type="number" min="0" step="1" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="min" data-orig="<?php echo esc_attr($st[$loc.'_min']); ?>" value="<?php echo esc_attr($st[$loc.'_min']); ?>"></td>
@@ -1994,9 +2048,9 @@ final class Schreuder_Bonusan_POS {
                 <h2>Aanvuladvies</h2>
                 <p class="description">Haarlem/Zwolle worden eerst tot hun gewenste voorraad vanuit Baarn aangevuld zodra ze op/onder minimum komen. Daarna controleert de plugin of Baarn zelf onder het minimum komt. De slimme doelvoorraad gebruikt het netto verkooptempo (verkopen min retouren) uit het voorraadlogboek en bestaat dus pas vanaf het moment dat een product wordt gevolgd. Bij minder dan 14 dagen gegevens is het te onbetrouwbaar en wordt het niet gebruikt. Het verandert niets automatisch.</p>
                 <?php if(empty($advice)): ?><p>Nog geen producten.</p><?php else: ?>
-                <div class="sbp-stock-scroll"><table class="widefat striped"><thead><tr><th>Product</th><th>Baarn</th><th>Haarlem</th><th>Zwolle</th><th>Naar Haarlem</th><th>Naar Zwolle</th><th>Extern aanvullen</th><th>Route</th><th>Verkoop 30d B/H/Z</th><th>Slim gewenst B/H/Z</th></tr></thead><tbody>
+                <div class="sbp-stock-scroll"><table class="widefat striped"><thead><tr><th>Product</th><th>Baarn</th><th>Haarlem</th><th>Zwolle</th><th>Aanvulling</th><th>Naar Haarlem</th><th>Naar Zwolle</th><th>Extern aanvullen</th><th>Zelf bestellen B/H/Z</th><th>Route</th><th>Verkoop 30d B/H/Z</th><th>Slim gewenst B/H/Z</th></tr></thead><tbody>
                 <?php foreach($advice as $a): ?>
-                    <tr class="<?php echo ($a['external_need']>0?'sbp-stock-danger':(($a['to_haarlem']>0||$a['to_zwolle']>0)?'sbp-stock-warn':'')); ?>"><td><strong><?php echo esc_html($a['name']); ?></strong><br><small><?php echo esc_html($a['sku'] ?: '—'); ?></small></td><td><?php echo esc_html($a['baarn']); ?></td><td><?php echo esc_html($a['haarlem']); ?></td><td><?php echo esc_html($a['zwolle']); ?></td><td><?php echo esc_html($a['to_haarlem']); ?></td><td><?php echo esc_html($a['to_zwolle']); ?></td><td><strong><?php echo esc_html($a['external_need']); ?></strong></td><td><?php echo esc_html($a['route_label']); ?></td><td><?php echo esc_html(round($a['velocity']['baarn']['d30'],1).'/'.round($a['velocity']['haarlem']['d30'],1).'/'.round($a['velocity']['zwolle']['d30'],1)); ?></td><td><?php echo esc_html($a['smart_target']['baarn'].'/'.$a['smart_target']['haarlem'].'/'.$a['smart_target']['zwolle']); ?><?php echo $a['low_data'] ? ' <small>(weinig data: '.(int)$a['data_days'].' d)</small>' : ''; ?></td></tr>
+                    <tr class="<?php echo ($a['external_need']>0?'sbp-stock-danger':(($a['to_haarlem']>0||$a['to_zwolle']>0||array_sum($a['own_need'])>0)?'sbp-stock-warn':'')); ?>"><td><strong><?php echo esc_html($a['name']); ?></strong><br><small><?php echo esc_html($a['sku'] ?: '—'); ?></small></td><td><?php echo esc_html($a['baarn']); ?></td><td><?php echo esc_html($a['haarlem']); ?></td><td><?php echo esc_html($a['zwolle']); ?></td><td><?php echo esc_html($a['mode_label']); ?></td><td><?php echo 'transfer'===$a['mode'] ? esc_html($a['to_haarlem']) : '—'; ?></td><td><?php echo 'transfer'===$a['mode'] ? esc_html($a['to_zwolle']) : '—'; ?></td><td><strong><?php echo 'transfer'===$a['mode'] ? esc_html($a['external_need']) : '—'; ?></strong></td><td><?php echo 'direct'===$a['mode'] ? esc_html($a['own_need']['baarn'].'/'.$a['own_need']['haarlem'].'/'.$a['own_need']['zwolle']) : '—'; ?></td><td><?php echo esc_html($a['route_label']); ?></td><td><?php echo esc_html(round($a['velocity']['baarn']['d30'],1).'/'.round($a['velocity']['haarlem']['d30'],1).'/'.round($a['velocity']['zwolle']['d30'],1)); ?></td><td><?php echo esc_html($a['smart_target']['baarn'].'/'.$a['smart_target']['haarlem'].'/'.$a['smart_target']['zwolle']); ?><?php echo $a['low_data'] ? ' <small>(weinig data: '.(int)$a['data_days'].' d)</small>' : ''; ?></td></tr>
                 <?php endforeach; ?>
                 </tbody></table></div><?php endif; ?>
             </div>
@@ -2030,9 +2084,10 @@ final class Schreuder_Bonusan_POS {
             const nonce=<?php echo wp_json_encode($nonce); ?>; let timer=null;
             function post(action,data){data=data||{};data.action=action;data._ajax_nonce=nonce;return $.post(ajaxurl,data).fail(function(x){alert(x.responseJSON&&x.responseJSON.data&&x.responseJSON.data.message?x.responseJSON.data.message:'De actie is mislukt.');});}
             function esc(s){return $('<div>').text(s==null?'':s).html();}
-            $('#sbp-stock-search').on('input',function(){let term=$(this).val().trim(),box=$('#sbp-stock-search-results');clearTimeout(timer);if(term.length<2){box.hide().empty();return;}timer=setTimeout(function(){post('sbp_stock_product_search',{term:term}).done(function(r){if(!r.success||!r.data.results.length){box.html('<div style="padding:9px">Geen product gevonden.</div>').show();return;}let h='';r.data.results.forEach(function(x){h+='<button type="button" class="sbp-stock-search-item" data-id="'+x.id+'"><strong>'+esc(x.name)+'</strong><br><small>SKU '+esc(x.sku||'—')+(x.tracked?' · al toegevoegd':'')+'</small></button>';});box.html(h).show();});},250);});
+            $('#sbp-stock-search').on('input',function(){let term=$(this).val().trim(),box=$('#sbp-stock-search-results');clearTimeout(timer);if(term.length<2){box.hide().empty();return;}timer=setTimeout(function(){post('sbp_stock_product_search',{term:term}).done(function(r){if(!r.success||!r.data.results.length){box.html('<div style="padding:9px">Geen product gevonden.</div>').show();return;}let h='';r.data.results.forEach(function(x){h+='<button type="button" class="sbp-stock-search-item" data-id="'+x.id+'"><strong>'+esc(x.name)+'</strong><br><small>SKU '+esc(x.sku||'—')+(x.hidden?' · verborgen in webshop':' · zichtbaar in webshop')+(x.tracked?' · al toegevoegd':'')+'</small></button>';});box.html(h).show();});},250);});
             $(document).on('click','.sbp-stock-search-item',function(){let b=$(this);post('sbp_stock_add_product',{product_id:b.data('id')}).done(function(r){if(r.success)location.reload();else alert(r.data.message||'Toevoegen mislukt.');});});
             $('#sbp-stock-form').on('submit',function(e){e.preventDefault();let changes=[];$('.sbp-stock-number').each(function(){let i=$(this),orig=String(i.data('orig')),val=i.val();if(val===''||parseFloat(val)===parseFloat(orig))return;let c={id:i.data('id'),loc:i.data('loc'),type:i.data('type'),value:val};if(c.type==='stock')c.expected=orig;changes.push(c);});if(!changes.length){$('#sbp-stock-save-status').text('Geen wijzigingen.');return;}let btn=$(this).find('button[type=submit]').prop('disabled',true);post('sbp_stock_save',{changes:JSON.stringify(changes)}).done(function(r){if(r.success){$('#sbp-stock-save-status').text('Opgeslagen');setTimeout(function(){location.reload();},500);}else{alert(r.data.message||'Opslaan mislukt.');}}).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){btn.prop('disabled',false);});});
+            $(document).on('change','.sbp-stock-mode',function(){post('sbp_stock_mode',{product_id:$(this).data('id'),mode:$(this).val()}).done(function(){location.reload();});});
             $(document).on('click','.sbp-stock-remove',function(){if(!confirm('Dit product niet meer volgen in locatievoorraad? De voorraadhistorie blijft bewaard.'))return;let id=$(this).closest('tr').data('product-id');post('sbp_stock_remove_product',{product_id:id}).done(function(r){if(r.success)location.reload();});});
             $('.sbp-assign-location').on('click',function(){let b=$(this),row=b.closest('tr');post('sbp_assign_order_location',{order_id:row.data('order-id'),location:b.data('location')}).done(function(r){if(r.success){row.fadeOut(200,function(){location.reload();});}else alert(r.data.message||'Locatie kon niet worden opgeslagen.');});});
             $('#sbp-transfer-do').on('click',function(){let data={product_id:$('#sbp-transfer-product').val(),from:$('#sbp-transfer-from').val(),to:$('#sbp-transfer-to').val(),qty:$('#sbp-transfer-qty').val()};post('sbp_stock_transfer',data).done(function(r){if(r.success){$('#sbp-transfer-status').text(r.data.message);setTimeout(function(){location.reload();},500);}else alert(r.data.message||'Overboeken mislukt.');});});
@@ -2048,7 +2103,7 @@ final class Schreuder_Bonusan_POS {
         if ( strlen($term) < 2 ) { wp_send_json_success(array('results'=>array())); }
         global $wpdb; $like='%'.$wpdb->esc_like($term).'%';
         $ids=$wpdb->get_col($wpdb->prepare("SELECT DISTINCT p.ID FROM {$wpdb->posts} p LEFT JOIN {$wpdb->postmeta} pm ON(pm.post_id=p.ID AND pm.meta_key='_sku') WHERE p.post_type IN('product','product_variation') AND p.post_status NOT IN('trash','auto-draft') AND(p.post_title LIKE %s OR pm.meta_value LIKE %s) ORDER BY p.post_title ASC LIMIT 30",$like,$like));
-        $results=array(); foreach($ids as $id){$product=wc_get_product((int)$id);if(!$product)continue;$results[]=array('id'=>(int)$id,'name'=>$product->get_name(),'sku'=>$product->get_sku(),'tracked'=>$this->is_stock_tracked_product_id($id));}
+        $results=array(); foreach($ids as $id){$product=wc_get_product((int)$id);if(!$product)continue;$results[]=array('id'=>(int)$id,'name'=>$product->get_name(),'sku'=>$product->get_sku(),'tracked'=>$this->is_stock_tracked_product_id($id),'hidden'=>$this->is_hidden_product($product));}
         wp_send_json_success(array('results'=>$results));
     }
 
@@ -2109,6 +2164,18 @@ final class Schreuder_Bonusan_POS {
 
     public function ajax_stock_remove_product() {
         $this->guard(); $id=absint($_POST['product_id']??0); if(!$id){wp_send_json_error(array('message'=>'Ongeldig product.'),400);} delete_post_meta($id,'_sbp_location_stock_enabled'); wp_send_json_success(array('message'=>'Product wordt niet meer gevolgd.'));
+    }
+
+    public function ajax_stock_mode() {
+        $this->guard();
+        $id = absint( $_POST['product_id'] ?? 0 );
+        $mode = sanitize_key( $_POST['mode'] ?? '' );
+        if ( ! $id || ! $this->is_stock_tracked_product_id( $id ) || ! in_array( $mode, array( '', 'transfer', 'direct' ), true ) ) {
+            wp_send_json_error( array( 'message' => 'Ongeldig product of keuze.' ), 400 );
+        }
+        if ( '' === $mode ) { delete_post_meta( $id, '_sbp_loc_mode' ); } else { update_post_meta( $id, '_sbp_loc_mode', $mode ); }
+        $this->forget_stock_cache();
+        wp_send_json_success( array( 'message' => 'Aanvulwijze opgeslagen.' ) );
     }
 
     public function ajax_stock_adjust() {

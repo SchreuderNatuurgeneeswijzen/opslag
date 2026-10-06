@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.8.0
+Stable tag: 1.8.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,12 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.8.1 =
+* Aanvulwijze per gevolgd product. Alleen producten die Bonusan niet kan leveren (in de webshop verborgen en niet op de turflijst) worden vanuit Baarn naar Haarlem en Zwolle aangevuld, met extern aanvuladvies voor Baarn. Alle andere gevolgde producten bestellen Haarlem en Zwolle zelf bij Bonusan via de turflijst; daarvoor toont het advies alleen hoeveel die locatie zelf moet bestellen en er komt geen transferadvies.
+* De wijze wordt automatisch bepaald (zichtbaarheid "Verborgen" en niet op de turflijst) en is per product te overschrijven in het voorraadscherm.
+* Het advies op het Bonusan-bestelscherm is nu per gekozen locatie: Haarlem en Zwolle zien wat ze zelf moeten bestellen of van Baarn ontvangen; Baarn ziet wat naar Haarlem/Zwolle moet en het externe advies.
+* Zoekresultaten bij "Product aan locatievoorraad toevoegen" tonen of het product verborgen of zichtbaar is in de webshop.
 
 = 1.8.0 =
 * Locatievoorraad volledig herbouwd op een eigen grootboek (tabellen `sbp_stock` en `sbp_stock_ledger`). Iedere mutatie is één database-transactie met vergrendelde voorraadrij: gelijktijdige kassaverkopen kunnen elkaar niet meer overschrijven en het saldo is altijd gelijk aan beginsaldo plus de som van het logboek.
