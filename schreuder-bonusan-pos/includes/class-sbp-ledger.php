@@ -439,7 +439,7 @@ final class SBP_Ledger {
                 "UPDATE $t SET qty_received = qty_received + %f, qty_cancelled = qty_cancelled + %f, closed_gmt = " . ( $new_open <= 0.0005 ? $wpdb->prepare( '%s', gmdate( 'Y-m-d H:i:s' ) ) : 'NULL' ) . ' WHERE id = %d',
                 $receive, $cancel, $line_id
             ) );
-            return array( 'received' => $receive, 'cancelled' => $cancel, 'open_after' => max( 0.0, $new_open ) );
+            return array( 'received' => $receive, 'cancelled' => $cancel, 'open_after' => max( 0.0, $new_open ), 'product_id' => $pid );
         } );
     }
 

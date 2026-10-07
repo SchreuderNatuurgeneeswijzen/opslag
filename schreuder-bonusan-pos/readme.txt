@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.9.0
+Stable tag: 1.10.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,12 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.10.0 =
+* Producten importeren uit een Excel-turflijst. Bij Locatievoorraad kun je een Bonusan-turflijst (.xlsx, zoals Bestelling-Bonusan-turflijst Baarn/Haarlem/Zwolle) uploaden. De producten worden op SKU (kolom Artikel/EAN/GTIN) aan je webshop gekoppeld. Je ziet eerst een controle (nieuw, al gevolgd, niet in de webshop gevonden, consult, dubbel in het bestand) en kiest zelf wat wordt overgenomen. Het bestand wordt niet bewaard.
+* Een nieuw gevolgd product wacht op de getelde beginvoorraad. Tot je voor dat product een voorraad invoert (tellen, levering of akkoord op een levering) worden er geen verkopen van afgeboekt en komt het niet in het aanvuladvies. Daarmee ontstaat geen negatieve voorraad door het toevoegen van veel producten. Producten die al gevolgd werden blijven ongewijzigd.
+* Optioneel kan de kolom Aantal worden overgenomen als getelde beginvoorraad voor één gekozen locatie. In een turflijst is Aantal normaal een bestelaantal; daarom staat deze optie standaard uit en worden bestaande voorraden nooit overschreven.
+* Sjabloon Zwolle hersteld: Bacteri 8 Sachets had artikelnummer 583 in plaats van 200583, waardoor een verkoop daarvan in Zwolle niet op de turflijst terechtkwam.
 
 = 1.9.0 =
 * Verzonden Bonusan-bestellingen zijn nu de basis voor de voorraad. Na definitief verzenden worden de gevolgde producten uit de bestelling (aantal > 0) als "onderweg" naar die locatie vastgelegd. De voorraad verandert dan nog niet.
