@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.10.2
+Stable tag: 1.11.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,12 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.11.0 =
+* Product toevoegen, voorraad invullen en opslaan in één handeling. Zoek bij Locatievoorraad een product (pijltjes en Enter kiezen een resultaat), vul voorraad, minimum en gewenst voor Baarn, Haarlem en Zwolle in (Tab naar het volgende veld) en druk op Enter. Het product wordt toegevoegd en alles wordt in één keer opgeslagen. De rij verschijnt bovenaan de lijst zonder de pagina te herladen en de cursor staat weer in het zoekveld voor het volgende product.
+* Een leeg veld Voorraad nu betekent: nog niet geteld; het product wacht dan op beginvoorraad. Leeg minimum of gewenst wordt 0. Negatieve waarden of tekst worden geweigerd en het product wordt dan niet toegevoegd.
+* Kies je in de zoekresultaten een product dat al wordt gevolgd, dan springt de lijst naar dat product in plaats van het opnieuw toe te voegen.
+* Wijzigingen in de tabel worden automatisch opgeslagen zodra je een veld verlaat (Tab of Enter); een groen kader bevestigt het. De knop Alles opslaan is alleen nog een vangnet. Een gewijzigd voorraadgetal wordt alleen verwerkt als de voorraad sinds het laden van de pagina niet is veranderd.
 
 = 1.10.2 =
 * Locatievoorraad: zoekbalk boven de voorraadtabel. Typ een deel van de productnaam of de SKU en de lijst springt naar het eerste product, dat geel wordt gemarkeerd. Met Enter (of de knoppen ↑ ↓) ga je naar de volgende of vorige treffer; het aantal treffers staat ernaast. Met "Alleen gevonden producten tonen" verberg je de rest van de lijst tijdelijk. Zoeken wijzigt of bewaart niets.
