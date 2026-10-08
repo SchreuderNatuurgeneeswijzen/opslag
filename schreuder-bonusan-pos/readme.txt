@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.12.0
+Stable tag: 1.13.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,14 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.13.0 =
+* De Bonusan-turflijst volgt nu de voorraad. Voor een gevolgd product (met beginvoorraad, eigen bestelling per locatie en een gewenste voorraad > 0) is "Te bestellen" het verschil tussen gewenst en voorraad + onderweg (naar boven afgerond). Staat voorraad + onderweg op of boven gewenst, dan is het aantal 0 en gaat het product niet mee in het Excel-bestand naar Bonusan. Onder het aantal staat telkens de reden.
+* Het minimum is voor Bonusan-producten alleen een signaal: in het voorraadoverzicht krijgt zo'n product een waarschuwing ("Op of onder minimum") zodra voorraad + onderweg op of onder het minimum zit. Voor producten die je niet bij Bonusan bestelt (planner) en voor doorleveren vanuit Baarn blijft het minimum het moment om te bestellen, tot de gewenste voorraad.
+* Producten zonder beginvoorraad, zonder gewenste voorraad, niet-gevolgde producten en producten die vanuit Baarn worden doorgeleverd houden op de turflijst het verkochte aantal.
+* In het controlescherm vóór het verzenden zie je per regel wat is verkocht (kassa en webshop) én hoeveel er nodig is om aan te vullen tot gewenst; dat laatste is leidend en vooraf ingevuld. Per regel kies je "Verkocht" of typ je een aantal; of vink meerdere regels aan en gebruik "Geselecteerde: verkochte aantallen bestellen" of "Geselecteerde: aanvullen tot gewenst" (handmatig toegevoegde regels blijven staan). Het Excel-bestand voor Bonusan bevat alleen het uiteindelijke bestelaantal.
+* "Herstel" zet het aantal terug op het voorgestelde aantal; een aantal dat je zelf aanpast blijft behouden als concept.
+* Nieuwe instelling "Turflijst volgt voorraad" (standaard Ja); op Nee bestel je weer altijd het verkochte aantal.
 
 = 1.12.0 =
 * Het aanvuladvies op het Bonusan-bestelscherm kan nu worden overgenomen in de bestellijst van de gekozen locatie (Baarn, Haarlem of Zwolle). Vink de regels aan die je wilt (of alles), pas zo nodig het aantal aan en klik op "Geselecteerd advies overnemen in de bestellijst". Wat er gebeurt:
