@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.13.0
+ * Version: 1.14.0
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.13.0';
+    const VERSION = '1.14.0';
 
     private static $instance = null;
 
@@ -81,6 +81,9 @@ final class Schreuder_Bonusan_POS {
         add_action( 'admin_notices', array( $this, 'dependency_notice' ) );
         add_action( 'admin_notices', array( $this, 'pending_stock_location_notice' ) );
         add_action( 'admin_notices', array( $this, 'stock_level_notice' ) );
+        add_action( 'sbp_forecast_daily', array( $this, 'run_forecast_mail' ) );
+        add_action( 'admin_post_sbp_forecast_now', array( $this, 'forecast_now' ) );
+        add_action( 'init', array( $this, 'ensure_forecast_cron' ) );
 
         // Compatibility hooks for YITH POS versions that expose a register-close action.
         foreach ( array( 'yith_pos_register_closed', 'yith_pos_after_register_close', 'yith_pos_register_session_closed' ) as $hook ) {
@@ -140,6 +143,9 @@ final class Schreuder_Bonusan_POS {
             $out['location_meta'][$loc] = sanitize_text_field( $input['location_meta'][$loc] ?? '' );
         }
         $out['extra_register_meta'] = sanitize_text_field( $input['extra_register_meta'] ?? '' );
+        $out['forecast_days'] = max( 1, min( 60, (int)( $input['forecast_days'] ?? 14 ) ) );
+        $out['forecast_email'] = ( isset( $input['forecast_email'] ) && 'no' === $input['forecast_email'] ) ? 'no' : 'yes';
+        $out['forecast_recipient'] = sanitize_email( $input['forecast_recipient'] ?? '' );
         $out['stock_rule_orders'] = ( isset( $input['stock_rule_orders'] ) && 'no' === $input['stock_rule_orders'] ) ? 'no' : 'yes';
         return $out;
     }
@@ -157,6 +163,10 @@ final class Schreuder_Bonusan_POS {
             'extra_register_meta' => '',
             // Bestelaantal op de turflijst volgt de voorraad (gevolgde producten met gewenste voorraad).
             'stock_rule_orders' => 'yes',
+            // Voorraadsignaal: waarschuw zoveel dagen voordat het minimum naar verwachting wordt bereikt.
+            'forecast_days' => 14,
+            'forecast_email' => 'yes',
+            'forecast_recipient' => '',
         );
     }
 
@@ -199,6 +209,7 @@ final class Schreuder_Bonusan_POS {
                     <tr><th>YITH locatiekenmerk Haarlem</th><td><input class="regular-text" type="text" name="<?php echo esc_attr(self::OPTION); ?>[location_meta][haarlem]" value="<?php echo esc_attr($s['location_meta']['haarlem']); ?>"></td></tr>
                     <tr><th>YITH locatiekenmerk Zwolle</th><td><input class="regular-text" type="text" name="<?php echo esc_attr(self::OPTION); ?>[location_meta][zwolle]" value="<?php echo esc_attr($s['location_meta']['zwolle']); ?>"></td></tr>
                     <tr><th>Kenmerk extra kassa</th><td><input class="regular-text" type="text" name="<?php echo esc_attr(self::OPTION); ?>[extra_register_meta]" value="<?php echo esc_attr($s['extra_register_meta'] ?? ''); ?>"><p class="description">Register-ID('s) van de extra kassa (komma-gescheiden). Verkopen van deze kassa horen bij geen enkele locatie totdat je in het controlescherm (of bij Locatievoorraad) Baarn, Haarlem of Zwolle hebt gekozen. Ook onbekende kassa's, zoals een testkassa, wachten op een keuze.</p></td></tr>
+                    <tr><th>Voorraadsignaal vooraf</th><td><input type="number" min="1" max="60" class="small-text" name="<?php echo esc_attr(self::OPTION); ?>[forecast_days]" value="<?php echo esc_attr( (int)( $s['forecast_days'] ?? 14 ) ); ?>"> dagen vooraf<br><label><select name="<?php echo esc_attr(self::OPTION); ?>[forecast_email]"><option value="yes"<?php selected( $s['forecast_email'] ?? 'yes', 'yes' ); ?>>Dagelijks e-mailen</option><option value="no"<?php selected( $s['forecast_email'] ?? 'yes', 'no' ); ?>>Geen e-mail (alleen melding in WordPress)</option></select></label> aan <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPTION); ?>[forecast_recipient]" value="<?php echo esc_attr( $s['forecast_recipient'] ?? '' ); ?>" placeholder="leeg = Reply-To-adres"><p class="description">Je krijgt een signaal als een gevolgd product naar verwachting binnen dit aantal dagen op het minimum komt (op basis van het verkooptempo van de laatste 30–90 dagen), of er al op of onder zit, en er nog niet genoeg is besteld of onderweg. Per product en locatie volgt één e-mail, een herinnering na 7 dagen zolang het niet is opgelost. <a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=sbp_forecast_now' ), 'sbp_forecast_now' ) ); ?>">Stuur nu een controle-e-mail</a> (sla eerst je instellingen op).</p></td></tr>
                     <tr><th>Turflijst volgt voorraad</th><td><select name="<?php echo esc_attr(self::OPTION); ?>[stock_rule_orders]"><option value="yes"<?php selected( $s['stock_rule_orders'] ?? 'yes', 'yes' ); ?>>Ja: bestel alleen wat nodig is</option><option value="no"<?php selected( $s['stock_rule_orders'] ?? 'yes', 'no' ); ?>>Nee: bestel altijd het verkochte aantal</option></select><p class="description">Bij Ja bestelt een gevolgd product (met beginvoorraad en een gewenste voorraad) bij Bonusan tot de gewenste voorraad: staat voorraad + onderweg onder gewenst, dan wordt het verschil besteld; is er genoeg, dan wordt het aantal 0 en gaat het product niet mee naar Bonusan. Het minimum is hier alleen een signaal (waarschuwing in het voorraadoverzicht). Bij producten die je niet bij Bonusan bestelt is het minimum wel het moment om te bestellen. Producten zonder beginvoorraad of zonder gewenste voorraad blijven op het verkochte aantal.</p></td></tr>
                 </tbody></table>
                 <?php submit_button(); ?>
@@ -1690,6 +1701,7 @@ final class Schreuder_Bonusan_POS {
         $this->stock_cache = array();
         delete_transient( 'sbp_stock_alert_count' );
         delete_transient( 'sbp_stock_pending_count' );
+        delete_transient( 'sbp_forecast_items' );
     }
 
     /** Alleen minimum en gewenste voorraad zijn nog meta; het saldo staat in het grootboek (SBP_Ledger). */
@@ -2005,6 +2017,84 @@ final class Schreuder_Bonusan_POS {
         echo '<div class="notice notice-warning"><p><strong>Schreuder locatievoorraad:</strong> ' . esc_html( $n ) . ' kassaverkoop/verkoop heeft nog geen locatie. <a href="' . esc_url($url) . '">Kies Baarn, Haarlem of Zwolle</a> zodat de voorraad correct wordt afgeboekt.</p></div>';
     }
 
+    /** Producten/locaties die al op of onder het minimum zitten (en niet genoeg onderweg), of dat binnen de ingestelde dagen verwacht worden. */
+    private function forecast_items() {
+        $cached = get_transient( 'sbp_forecast_items' );
+        if ( is_array( $cached ) ) { return $cached; }
+        $s = $this->settings();
+        $lead = max( 1, min( 60, (int)( $s['forecast_days'] ?? 14 ) ) );
+        $labels = $this->stock_locations();
+        $out = array();
+        foreach ( $this->get_stock_advice_rows() as $r ) {
+            foreach ( $labels as $loc => $label ) {
+                $d = $r['days_to_min'][$loc] ?? null;
+                $now_low = ! empty( $r['below_min'][$loc] );
+                if ( ! $now_low && ( null === $d || $d > $lead ) ) { continue; }
+                $out[] = array(
+                    'product_id' => (int)$r['product_id'], 'name' => (string)$r['name'], 'sku' => (string)$r['sku'],
+                    'loc' => $loc, 'label' => $label, 'stock' => (float)$r[$loc], 'onway' => (float)( $r['in_transit'][$loc] ?? 0 ),
+                    'min' => (float)$r[$loc.'_min'], 'target' => (float)$r[$loc.'_target'], 'daily' => (float)( $r['daily'][$loc] ?? 0 ),
+                    'days' => $now_low ? 0.0 : (float)$d,
+                );
+            }
+        }
+        usort( $out, function ( $a, $b ) { return $a['days'] <=> $b['days']; } );
+        set_transient( 'sbp_forecast_items', $out, 10 * MINUTE_IN_SECONDS );
+        return $out;
+    }
+
+    private function forecast_line( $it ) {
+        $fmt = function ( $n ) { return rtrim( rtrim( number_format( (float)$n, 1, ',', '' ), '0' ), ',' ); };
+        $line = '- ' . $it['name'] . ( '' !== $it['sku'] ? ' (' . $it['sku'] . ')' : '' ) . ' – ' . $it['label'] . ': voorraad ' . $fmt( $it['stock'] )
+            . ( $it['onway'] > 0 ? ' (+' . $fmt( $it['onway'] ) . ' onderweg)' : '' ) . ', minimum ' . $fmt( $it['min'] ) . ', gewenst ' . $fmt( $it['target'] ) . ' – ';
+        if ( $it['days'] <= 0 ) { return $line . 'zit al op of onder het minimum.'; }
+        return $line . 'op het minimum over ca. ' . ceil( $it['days'] ) . ' dagen (rond ' . wp_date( 'd-m-Y', time() + (int) round( $it['days'] * DAY_IN_SECONDS ) ) . '), tempo ca. ' . $fmt( $it['daily'] ) . ' per dag.';
+    }
+
+    public function ensure_forecast_cron() {
+        if ( function_exists( 'wp_next_scheduled' ) && ! wp_next_scheduled( 'sbp_forecast_daily' ) && function_exists( 'wp_schedule_event' ) ) {
+            wp_schedule_event( time() + 300, 'daily', 'sbp_forecast_daily' );
+        }
+    }
+
+    /** Stuurt het voorraadsignaal. Per product+locatie één mail, herinnering na 7 dagen; opgeloste gevallen worden vergeten. Geeft het aantal gemelde regels. */
+    public function run_forecast_mail( $force = false ) {
+        $force = ( true === $force );
+        $s = $this->settings();
+        if ( ! $force && 'no' === ( $s['forecast_email'] ?? 'yes' ) ) { return 0; }
+        if ( ! class_exists( 'WooCommerce' ) ) { return 0; }
+        delete_transient( 'sbp_forecast_items' );
+        $items = $this->forecast_items();
+        $notified = (array) get_option( 'sbp_forecast_notified', array() );
+        $now = time(); $keep = array(); $new = array();
+        foreach ( $items as $it ) {
+            $k = $it['product_id'] . ':' . $it['loc'];
+            if ( ! isset( $notified[$k] ) || $now - (int)$notified[$k] > 7 * DAY_IN_SECONDS ) { $new[] = $it; $keep[$k] = $now; }
+            else { $keep[$k] = (int)$notified[$k]; }
+        }
+        if ( ! $force ) { update_option( 'sbp_forecast_notified', $keep ); }
+        $send = $force ? $items : $new;
+        if ( ! $send ) { return 0; }
+        $to = sanitize_email( (string)( $s['forecast_recipient'] ?? '' ) );
+        if ( '' === $to ) { $to = sanitize_email( (string)( $s['reply_to'] ?? '' ) ); }
+        if ( '' === $to ) { $to = (string) get_option( 'admin_email' ); }
+        $lead = max( 1, min( 60, (int)( $s['forecast_days'] ?? 14 ) ) );
+        $lines = array_map( array( $this, 'forecast_line' ), $send );
+        $body = "Voorraadsignaal Schreuder: producten die binnen {$lead} dagen op het minimum komen of er al op of onder zitten en waarvoor nog niet genoeg is besteld of onderweg.\n\n"
+            . implode( "\n", $lines )
+            . "\n\nDit is een lineaire inschatting op basis van het verkooptempo van de laatste 30–90 dagen; seizoenspieken zijn niet meegenomen. Bekijk het aanvuladvies: " . admin_url( 'admin.php?page=schreuder-bonusan-stock' ) . "\n";
+        wp_mail( $to, 'Voorraadsignaal: ' . count( $send ) . ' product(en) bijna op minimum', $body );
+        return count( $send );
+    }
+
+    public function forecast_now() {
+        if ( ! current_user_can( 'manage_woocommerce' ) ) { wp_die( 'Geen toegang.' ); }
+        check_admin_referer( 'sbp_forecast_now' );
+        $n = $this->run_forecast_mail( true );
+        wp_safe_redirect( add_query_arg( 'sbp_fc', (int)$n, admin_url( 'admin.php?page=schreuder-bonusan-pos' ) ) );
+        exit;
+    }
+
     public function stock_level_notice() {
         if ( ! current_user_can('manage_woocommerce') || ! class_exists('WooCommerce') ) { return; }
         $count = get_transient( 'sbp_stock_alert_count' );
@@ -2020,6 +2110,18 @@ final class Schreuder_Bonusan_POS {
                      ($s['zwolle_target'] > 0 && $s['zwolle'] <= $s['zwolle_min']) ) { $count++; }
             }
             set_transient( 'sbp_stock_alert_count', $count, 5 * MINUTE_IN_SECONDS );
+        }
+        if ( isset( $_GET['sbp_fc'] ) ) {
+            $n = absint( $_GET['sbp_fc'] );
+            echo '<div class="notice notice-info is-dismissible"><p>' . ( $n ? esc_html( 'Controle-e-mail verstuurd met ' . $n . ' regel(s).' ) : 'Er is op dit moment niets om te melden; er is geen e-mail verstuurd.' ) . '</p></div>';
+        }
+        $soon = $this->forecast_items();
+        if ( $soon ) {
+            $upcoming = count( array_filter( $soon, function ( $i ) { return $i['days'] > 0; } ) );
+            if ( $upcoming ) {
+                $lead = max( 1, min( 60, (int)( $this->settings()['forecast_days'] ?? 14 ) ) );
+                echo '<div class="notice notice-warning"><p><strong>Schreuder voorraad:</strong> ' . esc_html( $upcoming ) . ' product/locatie(s) komen naar verwachting binnen ' . esc_html( $lead ) . ' dagen op het minimum. <a href="' . esc_url( admin_url( 'admin.php?page=schreuder-bonusan-stock' ) ) . '">Bekijk het aanvuladvies</a>.</p></div>';
+            }
         }
         if ( !$count ) { return; }
         $url = admin_url('admin.php?page=schreuder-bonusan-stock');
@@ -2104,13 +2206,16 @@ final class Schreuder_Bonusan_POS {
         $low_data = $data_days < 14;
         $window = max( 1, min( 90, $data_days ) );
         $vel_all = $this->velocity_cache[(int)$product_id] ?? array();
-        $velocity = array(); $smart = array();
+        $velocity = array(); $smart = array(); $daily = array(); $days_to_min = array();
         foreach ( $this->stock_locations() as $loc => $label ) {
             $raw = $vel_all[$loc] ?? array( 'd30' => 0.0, 'd90' => 0.0 );
             $m30 = $raw['d30'] * 30 / max( 1, min( 30, $window ) );
             $m90 = $raw['d90'] * 30 / $window;
             $velocity[$loc] = array( 'd30' => $raw['d30'], 'm90' => $m90 );
             $tempo = $low_data ? 0.0 : ceil( max( $m30, $m90 ) * 1.25 );
+            // Dagtempo (zonder 25% marge) en de verwachte dagen tot voorraad + onderweg het minimum bereikt; lineaire inschatting.
+            $daily[$loc] = $low_data ? 0.0 : max( $m30, $m90 ) / 30;
+            $days_to_min[$loc] = ( $s[$loc.'_target'] > 0 && ! $low_data && $daily[$loc] > 0 && $eff[$loc] > $s[$loc.'_min'] ) ? ( $eff[$loc] - $s[$loc.'_min'] ) / $daily[$loc] : null;
             $smart[$loc] = max( (float)$s[$loc.'_target'], $tempo, (float)$s[$loc.'_min'] );
         }
         $turf = $this->is_any_turflist_product( $product );
@@ -2123,7 +2228,7 @@ final class Schreuder_Bonusan_POS {
             'route_label' => $turf ? 'Bonusan-turflijst' : 'Planner/overige leverancier',
             'velocity' => $velocity, 'smart_target' => $smart,
             'data_days' => $data_days, 'low_data' => $low_data,
-            'mode' => $mode, 'own_need' => $own_need, 'below_min' => $below_min,
+            'mode' => $mode, 'own_need' => $own_need, 'below_min' => $below_min, 'daily' => $daily, 'days_to_min' => $days_to_min,
             'in_transit' => array( 'baarn' => (float)( $transit['baarn'] ?? 0 ), 'haarlem' => (float)( $transit['haarlem'] ?? 0 ), 'zwolle' => (float)( $transit['zwolle'] ?? 0 ) ),
             'mode_label' => 'transfer' === $mode ? 'Vanuit Baarn (Bonusan levert niet)' : 'Eigen bestelling per locatie',
         ) );
@@ -2419,7 +2524,7 @@ final class Schreuder_Bonusan_POS {
                 <?php if(empty($advice)): ?><p>Nog geen producten.</p><?php else: ?>
                 <div class="sbp-stock-scroll"><table class="widefat striped"><thead><tr><th>Product</th><th>Baarn</th><th>Haarlem</th><th>Zwolle</th><th>Onderweg B/H/Z</th><th>Aanvulling</th><th>Naar Haarlem</th><th>Naar Zwolle</th><th>Extern aanvullen</th><th>Zelf bestellen B/H/Z</th><th>Route</th><th>Verkoop 30d B/H/Z</th><th>Slim gewenst B/H/Z</th></tr></thead><tbody>
                 <?php foreach($advice as $a): ?>
-                    <tr class="<?php echo (($a['external_need']>0||array_filter($a['below_min']))?'sbp-stock-danger':(($a['to_haarlem']>0||$a['to_zwolle']>0||array_sum($a['own_need'])>0)?'sbp-stock-warn':'')); ?>"><td><strong><?php echo esc_html($a['name']); ?></strong><br><small><?php echo esc_html($a['sku'] ?: '—'); ?></small><?php $bm=array(); foreach($a['below_min'] as $bl=>$bv){ if($bv){ $bm[]=ucfirst($bl); } } if($bm){ echo '<br><small style="color:#b32d2e;font-weight:600">⚠ Op of onder minimum: '.esc_html(implode(', ',$bm)).'</small>'; } ?></td><td><?php echo esc_html($a['baarn']); ?></td><td><?php echo esc_html($a['haarlem']); ?></td><td><?php echo esc_html($a['zwolle']); ?></td><td><?php echo esc_html($a['in_transit']['baarn'].'/'.$a['in_transit']['haarlem'].'/'.$a['in_transit']['zwolle']); ?></td><td><?php echo esc_html($a['mode_label']); ?></td><td><?php echo 'transfer'===$a['mode'] ? esc_html($a['to_haarlem']) : '—'; ?></td><td><?php echo 'transfer'===$a['mode'] ? esc_html($a['to_zwolle']) : '—'; ?></td><td><strong><?php echo 'transfer'===$a['mode'] ? esc_html($a['external_need']) : '—'; ?></strong></td><td><?php echo 'direct'===$a['mode'] ? esc_html($a['own_need']['baarn'].'/'.$a['own_need']['haarlem'].'/'.$a['own_need']['zwolle']) : '—'; ?></td><td><?php echo esc_html($a['route_label']); ?></td><td><?php echo esc_html(round($a['velocity']['baarn']['d30'],1).'/'.round($a['velocity']['haarlem']['d30'],1).'/'.round($a['velocity']['zwolle']['d30'],1)); ?></td><td><?php echo esc_html($a['smart_target']['baarn'].'/'.$a['smart_target']['haarlem'].'/'.$a['smart_target']['zwolle']); ?><?php echo $a['low_data'] ? ' <small>(weinig data: '.(int)$a['data_days'].' d)</small>' : ''; ?></td></tr>
+                    <tr class="<?php echo (($a['external_need']>0||array_filter($a['below_min']))?'sbp-stock-danger':(($a['to_haarlem']>0||$a['to_zwolle']>0||array_sum($a['own_need'])>0)?'sbp-stock-warn':'')); ?>"><td><strong><?php echo esc_html($a['name']); ?></strong><br><small><?php echo esc_html($a['sku'] ?: '—'); ?></small><?php $bm=array(); foreach($a['below_min'] as $bl=>$bv){ if($bv){ $bm[]=ucfirst($bl); } } if($bm){ echo '<br><small style="color:#b32d2e;font-weight:600">⚠ Op of onder minimum: '.esc_html(implode(', ',$bm)).'</small>'; } $fl=array(); foreach(($a['days_to_min'] ?? array()) as $fl_loc=>$fl_d){ if(null!==$fl_d && $fl_d<=60){ $fl[]=ucfirst($fl_loc).' ~'.ceil($fl_d).' d'; } } if($fl){ echo '<br><small style="color:#7a4b00">Minimum over: '.esc_html(implode(', ',$fl)).'</small>'; } ?></td><td><?php echo esc_html($a['baarn']); ?></td><td><?php echo esc_html($a['haarlem']); ?></td><td><?php echo esc_html($a['zwolle']); ?></td><td><?php echo esc_html($a['in_transit']['baarn'].'/'.$a['in_transit']['haarlem'].'/'.$a['in_transit']['zwolle']); ?></td><td><?php echo esc_html($a['mode_label']); ?></td><td><?php echo 'transfer'===$a['mode'] ? esc_html($a['to_haarlem']) : '—'; ?></td><td><?php echo 'transfer'===$a['mode'] ? esc_html($a['to_zwolle']) : '—'; ?></td><td><strong><?php echo 'transfer'===$a['mode'] ? esc_html($a['external_need']) : '—'; ?></strong></td><td><?php echo 'direct'===$a['mode'] ? esc_html($a['own_need']['baarn'].'/'.$a['own_need']['haarlem'].'/'.$a['own_need']['zwolle']) : '—'; ?></td><td><?php echo esc_html($a['route_label']); ?></td><td><?php echo esc_html(round($a['velocity']['baarn']['d30'],1).'/'.round($a['velocity']['haarlem']['d30'],1).'/'.round($a['velocity']['zwolle']['d30'],1)); ?></td><td><?php echo esc_html($a['smart_target']['baarn'].'/'.$a['smart_target']['haarlem'].'/'.$a['smart_target']['zwolle']); ?><?php echo $a['low_data'] ? ' <small>(weinig data: '.(int)$a['data_days'].' d)</small>' : ''; ?></td></tr>
                 <?php endforeach; ?>
                 </tbody></table></div><?php endif; ?>
             </div>
@@ -3063,4 +3168,5 @@ final class Schreuder_Bonusan_POS {
 }
 
 register_activation_hook( __FILE__, function () { SBP_Ledger::install(); } );
+register_deactivation_hook( __FILE__, function () { wp_clear_scheduled_hook( 'sbp_forecast_daily' ); } );
 add_action( 'plugins_loaded', array( 'Schreuder_Bonusan_POS', 'instance' ) );

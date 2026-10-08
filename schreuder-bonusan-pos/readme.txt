@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.13.0
+Stable tag: 1.14.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,12 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.14.0 =
+* Voorraadsignaal vooraf: de plugin schat per gevolgd product en locatie in na hoeveel dagen voorraad + onderweg het minimum bereikt, op basis van het verkooptempo van de laatste 30–90 dagen (lineair, zonder seizoenscorrectie; pas na 14 dagen data). Staat dat binnen de ingestelde termijn (standaard 14 dagen), of zit het product al op of onder het minimum zonder dat genoeg is besteld of onderweg, dan krijg je een melding in WordPress en dagelijks een e-mail (instelbaar: dagen, e-mailadres, uitzetten).
+* Per product/locatie volgt één e-mail; een herinnering na 7 dagen zolang het niet is opgelost. Zodra er genoeg onderweg is of de voorraad is aangevuld, vervalt het signaal.
+* In het aanvuladvies staat onder de productnaam "Minimum over: Haarlem ~9 d". Met "Stuur nu een controle-e-mail" in de instellingen kun je de e-mail direct testen.
+* De e-mail gaat via WP-Cron en wordt dus verstuurd zodra de site na het dagelijkse moment wordt bezocht; bij weinig verkeer kan een server-cron betrouwbaarder zijn.
 
 = 1.13.0 =
 * De Bonusan-turflijst volgt nu de voorraad. Voor een gevolgd product (met beginvoorraad, eigen bestelling per locatie en een gewenste voorraad > 0) is "Te bestellen" het verschil tussen gewenst en voorraad + onderweg (naar boven afgerond). Staat voorraad + onderweg op of boven gewenst, dan is het aantal 0 en gaat het product niet mee in het Excel-bestand naar Bonusan. Onder het aantal staat telkens de reden.
