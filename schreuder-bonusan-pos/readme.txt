@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.14.0
+Stable tag: 1.14.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.14.1 =
+* Oplossing: een product dat nog "wacht op beginvoorraad" kon niet worden gestart met voorraad 0. Het voorraadveld toont dan al 0, en het opnieuw invullen van 0 gold als "niet gewijzigd", waardoor niets werd opgeslagen en er geen advies of bestelvoorstel kwam. Er staat nu een knop "Voorraad klopt (ook 0): start" bij zulke producten, en het invullen van een getal (ook 0) in een wachtend product wordt wel opgeslagen.
 
 = 1.14.0 =
 * Voorraadsignaal vooraf: de plugin schat per gevolgd product en locatie in na hoeveel dagen voorraad + onderweg het minimum bereikt, op basis van het verkooptempo van de laatste 30–90 dagen (lineair, zonder seizoenscorrectie; pas na 14 dagen data). Staat dat binnen de ingestelde termijn (standaard 14 dagen), of zit het product al op of onder het minimum zonder dat genoeg is besteld of onderweg, dan krijg je een melding in WordPress en dagelijks een e-mail (instelbaar: dagen, e-mailadres, uitzetten).

@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.14.0
+ * Version: 1.14.1
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.14.0';
+    const VERSION = '1.14.1';
 
     private static $instance = null;
 
@@ -2384,7 +2384,7 @@ final class Schreuder_Bonusan_POS {
         $st = $this->get_stock_state( $id );
         ob_start();
         ?>
-                    <tr data-product-id="<?php echo esc_attr($id); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><?php if ( ! $this->tracked_since( $id ) ) : ?><br><span class="sbp-wait">⏳ Wacht op beginvoorraad: verkopen worden pas afgeboekt nadat je de getelde voorraad hebt ingevoerd.</span><?php endif; ?><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
+                    <tr data-product-id="<?php echo esc_attr($id); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><?php if ( ! $this->tracked_since( $id ) ) : ?><br><span class="sbp-wait">⏳ Wacht op beginvoorraad: verkopen worden pas afgeboekt en er is pas advies nadat je de getelde voorraad hebt bevestigd. Is de voorraad echt 0? Typ dan 0 niet in, maar druk op de knop. <button type="button" class="button button-small sbp-start" data-id="<?php echo esc_attr($id); ?>">Voorraad klopt (ook 0): start</button></span><?php endif; ?><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
                     <?php foreach(array('baarn','haarlem','zwolle') as $loc): ?>
                         <td><input class="small-text sbp-stock-number<?php echo $st[$loc] < 0 ? ' sbp-neg' : ''; ?>" type="number" step="any" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="stock" title="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" data-orig="<?php echo esc_attr($st[$loc]); ?>" value="<?php echo esc_attr($st[$loc]); ?>"></td>
                         <td><input class="small-text sbp-stock-number" type="number" min="0" step="1" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="min" title="<?php echo esc_attr(ucfirst($loc)); ?> – Minimumvoorraad" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Minimumvoorraad" data-orig="<?php echo esc_attr($st[$loc.'_min']); ?>" value="<?php echo esc_attr($st[$loc.'_min']); ?>"></td>
@@ -2616,7 +2616,7 @@ final class Schreuder_Bonusan_POS {
             $(document).on('click','.sbp-stock-search-item',function(){pickResult($(this));});
             function saveCell(i){
                 let orig=String(i.data('orig')),val=i.val();
-                if(val===''||parseFloat(val)===parseFloat(orig)||i.data('saving'))return;
+                if(val===''||(parseFloat(val)===parseFloat(orig)&&!(i.data('type')==='stock'&&i.closest('tr').find('.sbp-wait').length))||i.data('saving'))return;
                 i.data('saving',true).css('outline','2px solid #dba617');
                 let c={id:i.data('id'),loc:i.data('loc'),type:i.data('type'),value:val};if(c.type==='stock')c.expected=orig;
                 post('sbp_stock_save',{changes:JSON.stringify([c])}).done(function(r){
@@ -2624,6 +2624,15 @@ final class Schreuder_Bonusan_POS {
                 }).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){i.data('saving',false);});
             }
             $(document).on('change','#sbp-stock-form .sbp-stock-number',function(){saveCell($(this));});
+            $(document).on('click','.sbp-start',function(){
+                let b=$(this),tr=b.closest('tr'),changes=[],ins=tr.find('.sbp-stock-number[data-type="stock"]');
+                ins.each(function(){let i=$(this),v=i.val();if(v==='')v='0';changes.push({id:i.data('id'),loc:i.data('loc'),type:'stock',value:v,expected:String(i.data('orig'))});});
+                b.prop('disabled',true);
+                post('sbp_stock_save',{changes:JSON.stringify(changes)}).done(function(r){
+                    if(r.success){ins.each(function(){let i=$(this);if(i.val()==='')i.val('0');i.data('orig',i.val());});tr.find('.sbp-wait').remove();}
+                    else{alert(r.data&&r.data.message?r.data.message:'Opslaan mislukt.');b.prop('disabled',false);}
+                }).fail(function(){setTimeout(function(){location.reload();},300);});
+            });
             $('#sbp-stock-form').on('submit',function(e){e.preventDefault();let changes=[];$('.sbp-stock-number').each(function(){let i=$(this),orig=String(i.data('orig')),val=i.val();if(val===''||parseFloat(val)===parseFloat(orig)||i.data('saving'))return;let c={id:i.data('id'),loc:i.data('loc'),type:i.data('type'),value:val};if(c.type==='stock')c.expected=orig;changes.push(c);});if(!changes.length){$('#sbp-stock-save-status').text('Alles is al opgeslagen.');return;}let btn=$(this).find('button[type=submit]').prop('disabled',true);post('sbp_stock_save',{changes:JSON.stringify(changes)}).done(function(r){if(r.success){$('#sbp-stock-save-status').text('Opgeslagen');setTimeout(function(){location.reload();},500);}else{alert(r.data.message||'Opslaan mislukt.');}}).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){btn.prop('disabled',false);});});
             $(document).on('change','.sbp-stock-mode',function(){post('sbp_stock_mode',{product_id:$(this).data('id'),mode:$(this).val()}).done(function(){location.reload();});});
             function stickyOffsets(){let h=$('.sbp-stock-table thead tr:first-child th').eq(1).outerHeight();if(h){$('.sbp-stock-table thead tr:nth-child(2) th').css('top',h+'px');}}
