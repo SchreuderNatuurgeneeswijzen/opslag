@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.11.0
+Stable tag: 1.12.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,15 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.12.0 =
+* Het aanvuladvies op het Bonusan-bestelscherm kan nu worden overgenomen in de bestellijst van de gekozen locatie (Baarn, Haarlem of Zwolle). Vink de regels aan die je wilt (of alles), pas zo nodig het aantal aan en klik op "Geselecteerd advies overnemen in de bestellijst". Wat er gebeurt:
+  - Bonusan-producten komen in de Bonusan-bestellijst van die locatie: het aantal bij "Te bestellen" wordt het geadviseerde aantal (een product dat niet is verkocht komt er als nieuwe regel bij). Met "Herstel" zet je het terug naar de kassaverkoop.
+  - Overige producten (Bonusan kan ze niet leveren, of ze hebben geen SKU) komen op de planner, bijvoorbeeld het externe advies voor Baarn. Wat al automatisch uit de kassaverkopen op de planner staat, wordt niet dubbel geteld.
+  - Een Bonusan-product dat niet in het sjabloon van die locatie staat, kan niet in de Bonusan-bestellijst; de regel toont dan waarom en je krijgt een melding.
+  - Interne aanvullingen vanuit Baarn naar Haarlem of Zwolle zijn geen bestelling en hebben dus geen vinkje.
+* Overnemen vervangt het aantal en telt niet op; nogmaals overnemen geeft hetzelfde resultaat. Het advies verandert nooit automatisch iets: alleen wat je zelf aanvinkt wordt overgenomen. Het overgenomen aantal blijft 24 uur bewaard (concept).
+* Tekst bij planner-producten: "Zelf bestellen (planner)" in plaats van "via Bonusan".
 
 = 1.11.0 =
 * Product toevoegen, voorraad invullen en opslaan in één handeling. Zoek bij Locatievoorraad een product (pijltjes en Enter kiezen een resultaat), vul voorraad, minimum en gewenst voor Baarn, Haarlem en Zwolle in (Tab naar het volgende veld) en druk op Enter. Het product wordt toegevoegd en alles wordt in één keer opgeslagen. De rij verschijnt bovenaan de lijst zonder de pagina te herladen en de cursor staat weer in het zoekveld voor het volgende product.
