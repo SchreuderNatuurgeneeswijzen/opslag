@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.10.0
+Stable tag: 1.10.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,11 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.10.1 =
+* Locatievoorraad: de kop van de voorraadtabel (Baarn / Haarlem / Zwolle en Nu / Min. / Gewenst) blijft bovenaan staan terwijl je door de lijst scrolt, en de productnaam blijft links staan als je zijwaarts scrolt. De tabel scrolt in een eigen vak dat de hoogte van het scherm volgt.
+* Elke locatie heeft een eigen kleur en een duidelijke scheidingslijn, zodat je ook zonder kop ziet bij welke locatie een veld hoort.
+* Elk invoerveld toont bij de muis wat het is, bijvoorbeeld "Haarlem – Minimumvoorraad".
 
 = 1.10.0 =
 * Producten importeren uit een Excel-turflijst. Bij Locatievoorraad kun je een Bonusan-turflijst (.xlsx, zoals Bestelling-Bonusan-turflijst Baarn/Haarlem/Zwolle) uploaden. De producten worden op SKU (kolom Artikel/EAN/GTIN) aan je webshop gekoppeld. Je ziet eerst een controle (nieuw, al gevolgd, niet in de webshop gevonden, consult, dubbel in het bestand) en kiest zelf wat wordt overgenomen. Het bestand wordt niet bewaard.
