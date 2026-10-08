@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.14.1
+ * Version: 1.15.0
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.14.1';
+    const VERSION = '1.15.0';
 
     private static $instance = null;
 
@@ -60,6 +60,7 @@ final class Schreuder_Bonusan_POS {
         add_action( 'wp_ajax_sbp_stock_mode', array( $this, 'ajax_stock_mode' ) );
         add_action( 'wp_ajax_sbp_stock_quick_add', array( $this, 'ajax_stock_quick_add' ) );
         add_action( 'wp_ajax_sbp_stock_receive', array( $this, 'ajax_stock_receive' ) );
+        add_action( 'wp_ajax_sbp_stock_register_order', array( $this, 'ajax_stock_register_order' ) );
         add_action( 'wp_ajax_sbp_stock_import_preview', array( $this, 'ajax_stock_import_preview' ) );
         add_action( 'wp_ajax_sbp_stock_import_apply', array( $this, 'ajax_stock_import_apply' ) );
         add_action( 'wp_ajax_sbp_stock_adjust', array( $this, 'ajax_stock_adjust' ) );
@@ -1775,6 +1776,38 @@ final class Schreuder_Bonusan_POS {
         return array( $applied, $problems );
     }
 
+    /** Registreert een bestelling bij een andere leverancier als "onderweg", zodat de levering later met één klik kan worden verwerkt. */
+    public function ajax_stock_register_order() {
+        $this->guard();
+        $supplier = trim( sanitize_text_field( wp_unslash( $_POST['supplier'] ?? '' ) ) );
+        $loc = sanitize_key( (string)( $_POST['location'] ?? '' ) );
+        if ( ! isset( $this->stock_locations()[$loc] ) ) { wp_send_json_error( array( 'message' => 'Kies een locatie.' ), 400 ); }
+        if ( '' === $supplier ) { wp_send_json_error( array( 'message' => 'Vul de naam van de leverancier in.' ), 400 ); }
+        $in = json_decode( (string) wp_unslash( $_POST['lines'] ?? '[]' ), true );
+        if ( ! is_array( $in ) || ! $in ) { wp_send_json_error( array( 'message' => 'Voeg minstens één product toe.' ), 400 ); }
+        $lines = array(); $seen = array();
+        foreach ( $in as $l ) {
+            $pid = absint( $l['id'] ?? 0 );
+            $raw = str_replace( ',', '.', sanitize_text_field( (string)( $l['qty'] ?? '' ) ) );
+            $product = $pid ? wc_get_product( $pid ) : false;
+            if ( ! $product || ! is_numeric( $raw ) || (float)$raw <= 0 || (float)$raw > 100000 ) { wp_send_json_error( array( 'message' => 'Controleer de producten en aantallen: gebruik een aantal groter dan 0.' ), 400 ); }
+            $tid = $this->tracked_id_for_product( $product );
+            if ( ! $tid ) { wp_send_json_error( array( 'message' => $product->get_name() . ' staat niet in Locatievoorraad. Voeg het product eerst toe.' ), 400 ); }
+            if ( isset( $seen[$tid] ) ) { wp_send_json_error( array( 'message' => $product->get_name() . ' staat er dubbel in.' ), 400 ); }
+            $seen[$tid] = true;
+            $info = $this->stock_info( $tid );
+            $lines[] = array( 'product_id' => $tid, 'sku' => $info['sku'], 'name' => $info['name'], 'qty' => (float)$raw );
+        }
+        $shipment = 'z' . bin2hex( random_bytes( 6 ) );
+        try {
+            SBP_Ledger::create_shipment( $shipment, $loc, $lines, 'Bestelling bij ' . mb_substr( $supplier, 0, 120 ), get_current_user_id(), 'Handmatig geregistreerd' );
+        } catch ( Exception $e ) {
+            wp_send_json_error( array( 'message' => 'Opslaan mislukt: ' . $e->getMessage() ), 500 );
+        }
+        $this->forget_stock_cache();
+        wp_send_json_success( array( 'message' => count( $lines ) . ' product(en) staan nu als onderweg naar ' . ucfirst( $loc ) . '. Verwerk de levering straks onder Onderweg.' ) );
+    }
+
     public function ajax_stock_receive() {
         $this->guard();
         $changes = json_decode( (string) wp_unslash( $_POST['changes'] ?? '[]' ), true );
@@ -2495,10 +2528,19 @@ final class Schreuder_Bonusan_POS {
             </div>
             <?php endif; ?>
 
+            <div class="sbp-stock-card" id="sbp-register-order">
+                <h2>Besteld bij een andere leverancier</h2>
+                <p class="description">Heb je buiten Bonusan om besteld, registreer het hier. Het staat dan als "onderweg" (telt mee in het advies en het voorraadsignaal) en je verwerkt de levering later met één klik onder <em>Onderweg</em>: ontvangen zoals besteld, deels met nalevering, of niet leverbaar.</p>
+                <p><label>Leverancier <input type="text" id="sbp-ro-supplier" class="regular-text" placeholder="bijv. naam van de fabrikant"></label> <label>Levering naar <select id="sbp-ro-location"><?php foreach ( $this->stock_locations() as $rl => $rlabel ) : ?><option value="<?php echo esc_attr($rl); ?>"><?php echo esc_html($rlabel); ?></option><?php endforeach; ?></select></label></p>
+                <div class="sbp-stock-search-wrap"><input type="search" id="sbp-ro-search" class="regular-text" placeholder="Zoek product op naam of SKU…" autocomplete="off"><div id="sbp-ro-results" class="sbp-stock-search-results" style="display:none"></div></div>
+                <table class="widefat striped" id="sbp-ro-table" style="max-width:700px;margin-top:10px;display:none"><thead><tr><th>Product</th><th>Aantal besteld</th><th></th></tr></thead><tbody></tbody></table>
+                <p><button type="button" class="button button-primary" id="sbp-ro-save" disabled>Registreer als onderweg</button> <span id="sbp-ro-msg" role="status"></span></p>
+            </div>
+
             <?php $open_lines = SBP_Ledger::open_lines(); if ( $open_lines ) : $by_ship = array(); foreach ( $open_lines as $ol ) { $by_ship[$ol['shipment']][] = $ol; } ?>
             <div class="sbp-stock-card" id="sbp-inbound">
-                <h2>Onderweg – bestellingen bij Bonusan</h2>
-                <p class="description">Hier staan de gevolgde producten uit verzonden Bonusan-bestellingen. De voorraad stijgt pas nadat je de levering accordeert. Klopt alles, klik dan op Akkoord. Is er iets afwijkend (deels, nalevering of niet leverbaar), geef dat bij die regel aan; de overige regels worden als ontvangen zoals besteld verwerkt. Wat nog onderweg is telt mee in het aanvuladvies.</p>
+                <h2>Onderweg – bestellingen</h2>
+                <p class="description">Hier staan de gevolgde producten uit verzonden Bonusan-bestellingen en uit bestellingen die je zelf bij een andere leverancier hebt geregistreerd. De voorraad stijgt pas nadat je de levering accordeert. Klopt alles, klik dan op Akkoord. Is er iets afwijkend (deels, nalevering of niet leverbaar), geef dat bij die regel aan; de overige regels worden als ontvangen zoals besteld verwerkt. Wat nog onderweg is telt mee in het aanvuladvies.</p>
                 <?php foreach ( $by_ship as $ship => $lines ) : $first = $lines[0]; ?>
                 <div class="sbp-shipment" data-shipment="<?php echo esc_attr($ship); ?>" style="margin:14px 0">
                     <h3>Naar <?php echo esc_html(ucfirst($first['location'])); ?> · verzonden <?php echo esc_html(get_date_from_gmt($first['created_gmt'],'d-m-Y H:i')); ?> <small><?php echo esc_html($first['subject']); ?></small><?php echo $first['note'] ? ' <em>('.esc_html($first['note']).')</em>' : ''; ?></h3>
@@ -2624,6 +2666,25 @@ final class Schreuder_Bonusan_POS {
                 }).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){i.data('saving',false);});
             }
             $(document).on('change','#sbp-stock-form .sbp-stock-number',function(){saveCell($(this));});
+            let roTimer=null;
+            function roToggle(){let n=$('#sbp-ro-table tbody tr').length;$('#sbp-ro-table').toggle(n>0);$('#sbp-ro-save').prop('disabled',!n);}
+            $('#sbp-ro-search').on('input',function(){let term=$(this).val().trim(),box=$('#sbp-ro-results');clearTimeout(roTimer);if(term.length<2){box.hide().empty();return;}roTimer=setTimeout(function(){post('sbp_stock_product_search',{term:term}).done(function(r){if(!r.success||!r.data.results.length){box.html('<div style="padding:9px">Geen product gevonden.</div>').show();return;}let h='';r.data.results.forEach(function(x){h+='<button type="button" class="sbp-stock-search-item sbp-ro-item" data-id="'+esc(x.id)+'" data-name="'+esc(x.name).replace(/"/g,'&quot;')+'" data-tracked="'+(x.tracked?'1':'')+'"><strong>'+esc(x.name)+'</strong><br><small>SKU '+esc(x.sku||'—')+(x.tracked?'':' · staat nog niet in Locatievoorraad')+'</small></button>';});box.html(h).show();});},250);});
+            $(document).on('click','.sbp-ro-item',function(){
+                let b=$(this),id=b.data('id');$('#sbp-ro-results').hide().empty();$('#sbp-ro-search').val('');
+                if(!b.data('tracked')){$('#sbp-ro-msg').css('color','#b32d2e').text('Dit product staat nog niet in Locatievoorraad: voeg het eerst toe (hierboven).');return;}
+                $('#sbp-ro-msg').text('');
+                if($('#sbp-ro-table tbody tr[data-id="'+id+'"]').length){$('#sbp-ro-table tbody tr[data-id="'+id+'"] input').trigger('focus');return;}
+                $('#sbp-ro-table tbody').append($('<tr>').attr('data-id',id).append($('<td>').text(String(b.data('name')))).append($('<td>').append($('<input type="number" min="0" step="any" class="small-text sbp-ro-qty">'))).append($('<td>').append($('<button type="button" class="button button-small sbp-ro-del">Verwijderen</button>'))));
+                roToggle();$('#sbp-ro-table tbody tr:last input').trigger('focus');
+            });
+            $(document).on('click','.sbp-ro-del',function(){$(this).closest('tr').remove();roToggle();});
+            $('#sbp-ro-save').on('click',function(){
+                let lines=[];$('#sbp-ro-table tbody tr').each(function(){lines.push({id:$(this).data('id'),qty:$(this).find('.sbp-ro-qty').val()});});
+                let b=$(this).prop('disabled',true);
+                post('sbp_stock_register_order',{supplier:$('#sbp-ro-supplier').val(),location:$('#sbp-ro-location').val(),lines:JSON.stringify(lines)}).done(function(r){
+                    if(r.success){$('#sbp-ro-msg').css('color','#00700a').text('✓ '+r.data.message);setTimeout(function(){location.reload();},1200);}else{b.prop('disabled',false);}
+                }).fail(function(){b.prop('disabled',false);});
+            });
             $(document).on('click','.sbp-start',function(){
                 let b=$(this),tr=b.closest('tr'),changes=[],ins=tr.find('.sbp-stock-number[data-type="stock"]');
                 ins.each(function(){let i=$(this),v=i.val();if(v==='')v='0';changes.push({id:i.data('id'),loc:i.data('loc'),type:'stock',value:v,expected:String(i.data('orig'))});});

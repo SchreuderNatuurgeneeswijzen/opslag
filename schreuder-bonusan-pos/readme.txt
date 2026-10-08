@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.14.1
+Stable tag: 1.15.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.15.0 =
+* Bestellingen bij andere leveranciers registreren: op de pagina Locatievoorraad staat de kaart "Besteld bij een andere leverancier". Kies leverancier, locatie, producten en aantallen; het staat dan als "onderweg" (telt mee in advies, turflijst en voorraadsignaal). De levering verwerk je daarna met één klik onder Onderweg: ontvangen zoals besteld, deels met nalevering, deels met rest niet leverbaar, of niet leverbaar.
 
 = 1.14.1 =
 * Oplossing: een product dat nog "wacht op beginvoorraad" kon niet worden gestart met voorraad 0. Het voorraadveld toont dan al 0, en het opnieuw invullen van 0 gold als "niet gewijzigd", waardoor niets werd opgeslagen en er geen advies of bestelvoorstel kwam. Er staat nu een knop "Voorraad klopt (ook 0): start" bij zulke producten, en het invullen van een getal (ook 0) in een wachtend product wordt wel opgeslagen.
