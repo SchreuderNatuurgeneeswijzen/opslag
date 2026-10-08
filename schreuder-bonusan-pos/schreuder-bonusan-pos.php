@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.10.1
+ * Version: 1.10.2
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.10.1';
+    const VERSION = '1.10.2';
 
     private static $instance = null;
 
@@ -2119,6 +2119,13 @@ final class Schreuder_Bonusan_POS {
                 <?php if ( empty($products) ) : ?>
                     <p>Nog geen producten geselecteerd voor locatievoorraad.</p>
                 <?php else : ?>
+                <p class="sbp-find">
+                    <input type="search" id="sbp-find" class="regular-text" placeholder="Zoek in deze lijst op productnaam of SKU…" autocomplete="off" aria-label="Zoek een product in de voorraadlijst">
+                    <button type="button" class="button" id="sbp-find-prev" title="Vorige treffer (Shift+Enter)">↑</button>
+                    <button type="button" class="button" id="sbp-find-next" title="Volgende treffer (Enter)">↓</button>
+                    <span id="sbp-find-count" class="description" aria-live="polite"></span>
+                    <label style="margin-left:12px"><input type="checkbox" id="sbp-find-only"> Alleen gevonden producten tonen</label>
+                </p>
                 <form id="sbp-stock-form">
                     <div class="sbp-stock-scroll sbp-stock-main"><table class="widefat striped sbp-stock-table"><thead><tr><th rowspan="2">Product</th><th colspan="3">Baarn – hoofdvoorraad</th><th colspan="3">Haarlem</th><th colspan="3">Zwolle</th><th rowspan="2"></th></tr><tr><th>Nu</th><th>Min.</th><th>Gewenst</th><th>Nu</th><th>Min.</th><th>Gewenst</th><th>Nu</th><th>Min.</th><th>Gewenst</th></tr></thead><tbody>
                     <?php foreach ( $products as $id => $product ) : $st=$this->get_stock_state($id); ?>
@@ -2213,7 +2220,7 @@ final class Schreuder_Bonusan_POS {
             </div>
         </div>
         <style>
-        .sbp-stock-card{background:#fff;border:1px solid #c3c4c7;padding:16px 18px;margin:16px 0;max-width:1450px}.sbp-stock-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;max-width:1450px}.sbp-stock-grid .sbp-stock-card{margin:0}.sbp-stock-scroll{overflow-x:auto}.sbp-stock-table th{text-align:center}.sbp-stock-table td:first-child{min-width:220px}.sbp-stock-number{width:70px}.sbp-stock-search-wrap{position:relative;max-width:650px}.sbp-stock-search-results{position:absolute;z-index:50;background:#fff;border:1px solid #8c8f94;left:0;right:0;max-height:280px;overflow:auto}.sbp-stock-search-item{width:100%;display:block;text-align:left;border:0;border-bottom:1px solid #eee;background:#fff;padding:9px;cursor:pointer}.sbp-stock-search-item:hover{background:#f0f6fc}.sbp-stock-danger td{background:#fff1f0}.sbp-stock-warn td{background:#fff8e5}.sbp-neg{color:#b32d2e;font-weight:600}.sbp-wait{color:#996800;font-size:12px}
+        .sbp-stock-card{background:#fff;border:1px solid #c3c4c7;padding:16px 18px;margin:16px 0;max-width:1450px}.sbp-stock-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:16px;max-width:1450px}.sbp-stock-grid .sbp-stock-card{margin:0}.sbp-stock-scroll{overflow-x:auto}.sbp-stock-table th{text-align:center}.sbp-stock-table td:first-child{min-width:220px}.sbp-stock-number{width:70px}.sbp-stock-search-wrap{position:relative;max-width:650px}.sbp-stock-search-results{position:absolute;z-index:50;background:#fff;border:1px solid #8c8f94;left:0;right:0;max-height:280px;overflow:auto}.sbp-stock-search-item{width:100%;display:block;text-align:left;border:0;border-bottom:1px solid #eee;background:#fff;padding:9px;cursor:pointer}.sbp-stock-search-item:hover{background:#f0f6fc}.sbp-stock-danger td{background:#fff1f0}.sbp-stock-warn td{background:#fff8e5}.sbp-neg{color:#b32d2e;font-weight:600}.sbp-wait{color:#996800;font-size:12px}.sbp-find{margin:0 0 10px}.sbp-find #sbp-find{width:360px;max-width:100%}.sbp-stock-table tbody tr.sbp-hit td{background:#fff8c5 !important}.sbp-stock-table tbody tr.sbp-hit-current td{background:#ffe27a !important}.sbp-stock-table tbody tr.sbp-hit-current td:first-child{box-shadow:inset 4px 0 #dba617}
         .sbp-stock-main{max-height:calc(100vh - 150px);min-height:240px;overflow:auto;position:relative}
         .sbp-stock-table{border-collapse:separate;border-spacing:0}
         .sbp-stock-table thead th{position:sticky;top:0;z-index:4;background:#f0f0f1;box-shadow:inset 0 -1px 0 #c3c4c7;vertical-align:middle}
@@ -2236,6 +2243,31 @@ final class Schreuder_Bonusan_POS {
             $(document).on('change','.sbp-stock-mode',function(){post('sbp_stock_mode',{product_id:$(this).data('id'),mode:$(this).val()}).done(function(){location.reload();});});
             function stickyOffsets(){let h=$('.sbp-stock-table thead tr:first-child th').eq(1).outerHeight();if(h){$('.sbp-stock-table thead tr:nth-child(2) th').css('top',h+'px');}}
             stickyOffsets();$(window).on('resize',stickyOffsets);
+            // Zoeken in de voorraadlijst: springt naar het product, markeert het en laat doorbladeren.
+            let findHits=[],findIdx=-1,findTimer=null;
+            function normTxt(t){return String(t||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');}
+            function goHit(){
+                $('.sbp-stock-table tbody tr.sbp-hit-current').removeClass('sbp-hit-current');
+                if(findIdx<0||!findHits[findIdx])return;
+                let tr=findHits[findIdx].addClass('sbp-hit-current'),box=$('.sbp-stock-main')[0],head=$('.sbp-stock-table thead').outerHeight()||0;
+                box.scrollTop+=tr[0].getBoundingClientRect().top-box.getBoundingClientRect().top-head-6;
+                box.scrollIntoView({block:'nearest'});
+                $('#sbp-find-count').text((findIdx+1)+' van '+findHits.length+' gevonden');
+            }
+            function runFind(){
+                let q=normTxt($('#sbp-find').val()).trim(),only=$('#sbp-find-only').is(':checked'),rows=$('.sbp-stock-table tbody tr');
+                rows.removeClass('sbp-hit sbp-hit-current').show(); findHits=[]; findIdx=-1;
+                if(!q){$('#sbp-find-count').text('');return;}
+                rows.each(function(){let tr=$(this);if(normTxt(tr.find('td:first-child').text()).indexOf(q)!==-1){tr.addClass('sbp-hit');findHits.push(tr);}else if(only){tr.hide();}});
+                if(!findHits.length){$('#sbp-find-count').text('Niets gevonden');return;}
+                findIdx=0; goHit();
+            }
+            function stepHit(d){if(!findHits.length){return;}findIdx=(findIdx+d+findHits.length)%findHits.length;goHit();}
+            $('#sbp-find').on('input',function(){clearTimeout(findTimer);findTimer=setTimeout(runFind,150);});
+            $('#sbp-find').on('keydown',function(e){if(e.key==='Enter'){e.preventDefault();stepHit(e.shiftKey?-1:1);}});
+            $('#sbp-find-only').on('change',runFind);
+            $('#sbp-find-next').on('click',function(){stepHit(1);});
+            $('#sbp-find-prev').on('click',function(){stepHit(-1);});
             let impToken=null;
             $('#sbp-imp-check').on('click',function(){
                 let f=$('#sbp-imp-file')[0].files[0]; if(!f){alert('Kies eerst een Excel-bestand (.xlsx).');return;}

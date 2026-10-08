@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.10.1
+Stable tag: 1.10.2
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.10.2 =
+* Locatievoorraad: zoekbalk boven de voorraadtabel. Typ een deel van de productnaam of de SKU en de lijst springt naar het eerste product, dat geel wordt gemarkeerd. Met Enter (of de knoppen ↑ ↓) ga je naar de volgende of vorige treffer; het aantal treffers staat ernaast. Met "Alleen gevonden producten tonen" verberg je de rest van de lijst tijdelijk. Zoeken wijzigt of bewaart niets.
 
 = 1.10.1 =
 * Locatievoorraad: de kop van de voorraadtabel (Baarn / Haarlem / Zwolle en Nu / Min. / Gewenst) blijft bovenaan staan terwijl je door de lijst scrolt, en de productnaam blijft links staan als je zijwaarts scrolt. De tabel scrolt in een eigen vak dat de hoogte van het scherm volgt.
