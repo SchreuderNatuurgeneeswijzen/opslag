@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.15.0
+Stable tag: 1.16.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.16.0 =
+* Sorteren: kies "Standaard volgorde", "Op alfabet (productnaam)" of "Op SKU / artikelnummer" in de controle vóór het verzenden (bestelregels en aanvuladvies) en op de pagina Locatievoorraad (voorraadlijst en aanvuladvies). SKU's worden numeriek gesorteerd, producten zonder SKU komen onderaan. De keuze wordt in de browser onthouden en verandert niets aan het Excel-bestand voor Bonusan (dat volgt het sjabloon).
 
 = 1.15.0 =
 * Bestellingen bij andere leveranciers registreren: op de pagina Locatievoorraad staat de kaart "Besteld bij een andere leverancier". Kies leverancier, locatie, producten en aantallen; het staat dan als "onderweg" (telt mee in advies, turflijst en voorraadsignaal). De levering verwerk je daarna met één klik onder Onderweg: ontvangen zoals besteld, deels met nalevering, deels met rest niet leverbaar, of niet leverbaar.
