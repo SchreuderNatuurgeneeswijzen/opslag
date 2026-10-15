@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.16.0
+ * Version: 1.16.1
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.16.0';
+    const VERSION = '1.16.1';
 
     private static $instance = null;
 
@@ -244,12 +244,13 @@ final class Schreuder_Bonusan_POS {
                 rows.sort(function(a,b){
                     let an=a.getAttribute('data-name'),bn=b.getAttribute('data-name'),as=a.getAttribute('data-sku')||'',bs=b.getAttribute('data-sku')||'';
                     if(mode==='name')return cmp(an,bn)||cmp(as,bs);
-                    if(mode==='sku'){if(as===''&&bs!=='')return 1;if(bs===''&&as!=='')return -1;return cmp(as,bs)||cmp(an,bn);}
+                    if(mode==='name_desc')return cmp(bn,an)||cmp(bs,as);
+                    if(mode==='sku'||mode==='sku_desc'){if(as===''&&bs!=='')return 1;if(bs===''&&as!=='')return -1;let c=cmp(as,bs)||cmp(an,bn);return mode==='sku'?c:(cmp(bs,as)||cmp(bn,an));}
                     return parseInt(a.getAttribute('data-ord'),10)-parseInt(b.getAttribute('data-ord'),10);
                 });
                 rows.forEach(function(r){tbody.append(r);});
             }
-            function sbpSortMode(){let m='';try{m=localStorage.getItem('sbp_sort')||'';}catch(e){}return (m==='name'||m==='sku')?m:'';}
+            function sbpSortMode(){let m='';try{m=localStorage.getItem('sbp_sort')||'';}catch(e){}return (m==='name'||m==='name_desc'||m==='sku'||m==='sku_desc')?m:'';}
             function sbpSortSave(m){try{localStorage.setItem('sbp_sort',m);}catch(e){}}
             function sbpApplyMain(){let m=sbpSortMode();$('.sbp-sort-select').val(m);['#sbp-items-table','#sbp-advice-table'].forEach(function(t){let tb=$(t+' tbody');if(tb.length)sbpSortRows(tb,m);});}
             $(document).on('change','.sbp-sort-select',function(){sbpSortSave($(this).val());sbpApplyMain();});
@@ -323,7 +324,7 @@ final class Schreuder_Bonusan_POS {
                     if(!d.items.length){html+='<div class="sbp-error">Geen bestelbare producten gevonden.</div>';}
                     html+='<div class="sbp-addbox"><strong>Product handmatig toevoegen</strong><p class="description">Alleen voor Bonusan- en Schreuder-producten die via de webshop/turflijst worden besteld. Deze producten komen nooit in de planner. Toegevoegde producten en aangepaste aantallen blijven 24 uur bewaard.</p><div class="sbp-search-wrap"><input type="search" id="sbp-product-search" class="regular-text" placeholder="Zoek op productnaam of SKU…" autocomplete="off"><div id="sbp-search-results" class="sbp-search-results" style="display:none"></div></div></div>';
                     if(d.items.length){
-                        html+='<p><strong>‘Te bestellen’ vult standaard aan tot de gewenste voorraad</strong> (gevolgde producten met beginvoorraad en gewenst aantal); overige producten staan op de echte kassaverkoop (Afgerond). Webshopverkopen zijn uitsluitend ter informatie. Het aantal tot de gewenste voorraad is leidend. Per regel kun je met <em>Verkocht</em> het verkochte aantal bestellen of zelf een aantal typen. Of vink meerdere regels aan en gebruik de knoppen hieronder.</p><p class="sbp-bulk"><label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Op alfabet (productnaam)</option><option value="sku">Op SKU / artikelnummer</option></select></label> <span id="sbp-sel-count">0 geselecteerd</span> <button type="button" class="button" id="sbp-sel-sold" disabled>Geselecteerde: verkochte aantallen bestellen</button> <button type="button" class="button" id="sbp-sel-target" disabled>Geselecteerde: aanvullen tot gewenst</button></p><table class="sbp-table" id="sbp-items-table"><thead><tr><th><input type="checkbox" id="sbp-sel-all" aria-label="Selecteer alle regels"></th><th>SKU</th><th>Product</th><th>Echte kassa<br><small>Afgerond</small></th><th>Webshop via kassa<br><small>In behandeling</small></th><th>Totaal verkocht</th><th>Aanvullen tot gewenst<br><small>Gewenst − voorraad − onderweg</small></th><th>Te bestellen</th></tr></thead><tbody>';
+                        html+='<p><strong>‘Te bestellen’ vult standaard aan tot de gewenste voorraad</strong> (gevolgde producten met beginvoorraad en gewenst aantal); overige producten staan op de echte kassaverkoop (Afgerond). Webshopverkopen zijn uitsluitend ter informatie. Het aantal tot de gewenste voorraad is leidend. Per regel kun je met <em>Verkocht</em> het verkochte aantal bestellen of zelf een aantal typen. Of vink meerdere regels aan en gebruik de knoppen hieronder.</p><p class="sbp-bulk"><label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Productnaam A → Z</option><option value="name_desc">Productnaam Z → A</option><option value="sku">SKU / artikelnummer laag → hoog</option><option value="sku_desc">SKU / artikelnummer hoog → laag</option></select></label> <span id="sbp-sel-count">0 geselecteerd</span> <button type="button" class="button" id="sbp-sel-sold" disabled>Geselecteerde: verkochte aantallen bestellen</button> <button type="button" class="button" id="sbp-sel-target" disabled>Geselecteerde: aanvullen tot gewenst</button></p><table class="sbp-table" id="sbp-items-table"><thead><tr><th><input type="checkbox" id="sbp-sel-all" aria-label="Selecteer alle regels"></th><th>SKU</th><th>Product</th><th>Echte kassa<br><small>Afgerond</small></th><th>Webshop via kassa<br><small>In behandeling</small></th><th>Totaal verkocht</th><th>Aanvullen tot gewenst<br><small>Gewenst − voorraad − onderweg</small></th><th>Te bestellen</th></tr></thead><tbody>';
                         d.items.forEach(i=>html+=itemRow(i));
                         html+='</tbody></table><p>'+d.order_count+' orders verwerkt. <span id="sbp-edit-status"></span></p>';
                     }
@@ -2506,7 +2507,7 @@ final class Schreuder_Bonusan_POS {
                     <p>Nog geen producten geselecteerd voor locatievoorraad.</p>
                 <?php else : ?>
                 <p class="sbp-find">
-                    <label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Op alfabet (productnaam)</option><option value="sku">Op SKU / artikelnummer</option></select></label>
+                    <label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Productnaam A → Z</option><option value="name_desc">Productnaam Z → A</option><option value="sku">SKU / artikelnummer laag → hoog</option><option value="sku_desc">SKU / artikelnummer hoog → laag</option></select></label>
                     <input type="search" id="sbp-find" class="regular-text" placeholder="Zoek in deze lijst op productnaam of SKU…" autocomplete="off" aria-label="Zoek een product in de voorraadlijst">
                     <button type="button" class="button" id="sbp-find-prev" title="Vorige treffer (Shift+Enter)">↑</button>
                     <button type="button" class="button" id="sbp-find-next" title="Volgende treffer (Enter)">↓</button>
@@ -2557,13 +2558,14 @@ final class Schreuder_Bonusan_POS {
             <?php $open_lines = SBP_Ledger::open_lines(); if ( $open_lines ) : $by_ship = array(); foreach ( $open_lines as $ol ) { $by_ship[$ol['shipment']][] = $ol; } ?>
             <div class="sbp-stock-card" id="sbp-inbound">
                 <h2>Onderweg – bestellingen</h2>
+                <p><label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Productnaam A → Z</option><option value="name_desc">Productnaam Z → A</option><option value="sku">SKU / artikelnummer laag → hoog</option><option value="sku_desc">SKU / artikelnummer hoog → laag</option></select></label></p>
                 <p class="description">Hier staan de gevolgde producten uit verzonden Bonusan-bestellingen en uit bestellingen die je zelf bij een andere leverancier hebt geregistreerd. De voorraad stijgt pas nadat je de levering accordeert. Klopt alles, klik dan op Akkoord. Is er iets afwijkend (deels, nalevering of niet leverbaar), geef dat bij die regel aan; de overige regels worden als ontvangen zoals besteld verwerkt. Wat nog onderweg is telt mee in het aanvuladvies.</p>
                 <?php foreach ( $by_ship as $ship => $lines ) : $first = $lines[0]; ?>
                 <div class="sbp-shipment" data-shipment="<?php echo esc_attr($ship); ?>" style="margin:14px 0">
                     <h3>Naar <?php echo esc_html(ucfirst($first['location'])); ?> · verzonden <?php echo esc_html(get_date_from_gmt($first['created_gmt'],'d-m-Y H:i')); ?> <small><?php echo esc_html($first['subject']); ?></small><?php echo $first['note'] ? ' <em>('.esc_html($first['note']).')</em>' : ''; ?></h3>
                     <div class="sbp-stock-scroll"><table class="widefat striped"><thead><tr><th>Product</th><th>Besteld</th><th>Al ontvangen</th><th>Niet leverbaar</th><th>Nog onderweg</th><th>Hoe is het geleverd?</th><th>Aantal ontvangen</th></tr></thead><tbody>
                     <?php foreach ( $lines as $l ) : $open = round((float)$l['qty_ordered']-(float)$l['qty_received']-(float)$l['qty_cancelled'],3); ?>
-                        <tr data-line="<?php echo esc_attr($l['id']); ?>" data-open="<?php echo esc_attr($open); ?>">
+                        <tr data-line="<?php echo esc_attr($l['id']); ?>" data-open="<?php echo esc_attr($open); ?>" data-name="<?php echo esc_attr($l['product_name']); ?>" data-sku="<?php echo esc_attr($l['sku']); ?>">
                             <td><strong><?php echo esc_html($l['product_name']); ?></strong><br><small><?php echo esc_html($l['sku'] ?: '—'); ?></small></td>
                             <td><?php echo esc_html((float)$l['qty_ordered']); ?></td><td><?php echo esc_html((float)$l['qty_received']); ?></td><td><?php echo esc_html((float)$l['qty_cancelled']); ?></td><td><strong><?php echo esc_html($open); ?></strong></td>
                             <td><select class="sbp-recv-mode"><option value="all">Ontvangen zoals besteld</option><option value="partial_wait">Deels ontvangen, rest volgt (nalevering)</option><option value="partial_cancel">Deels ontvangen, rest niet leverbaar</option><option value="wait">Nog niets ontvangen (blijft onderweg)</option><option value="cancel">Niet leverbaar</option></select></td>
@@ -2634,14 +2636,15 @@ final class Schreuder_Bonusan_POS {
                 rows.sort(function(a,b){
                     let an=a.getAttribute('data-name'),bn=b.getAttribute('data-name'),as=a.getAttribute('data-sku')||'',bs=b.getAttribute('data-sku')||'';
                     if(mode==='name')return cmp(an,bn)||cmp(as,bs);
-                    if(mode==='sku'){if(as===''&&bs!=='')return 1;if(bs===''&&as!=='')return -1;return cmp(as,bs)||cmp(an,bn);}
+                    if(mode==='name_desc')return cmp(bn,an)||cmp(bs,as);
+                    if(mode==='sku'||mode==='sku_desc'){if(as===''&&bs!=='')return 1;if(bs===''&&as!=='')return -1;let c=cmp(as,bs)||cmp(an,bn);return mode==='sku'?c:(cmp(bs,as)||cmp(bn,an));}
                     return parseInt(a.getAttribute('data-ord'),10)-parseInt(b.getAttribute('data-ord'),10);
                 });
                 rows.forEach(function(r){tbody.append(r);});
             }
-            function sbpSortMode(){let m='';try{m=localStorage.getItem('sbp_sort')||'';}catch(e){}return (m==='name'||m==='sku')?m:'';}
+            function sbpSortMode(){let m='';try{m=localStorage.getItem('sbp_sort')||'';}catch(e){}return (m==='name'||m==='name_desc'||m==='sku'||m==='sku_desc')?m:'';}
             function sbpSortSave(m){try{localStorage.setItem('sbp_sort',m);}catch(e){}}
-            function sbpApplyStock(){let m=sbpSortMode();$('.sbp-sort-select').val(m);['.sbp-stock-table','#sbp-stock-advice-table'].forEach(function(t){let tb=$(t+' tbody');if(tb.length)sbpSortRows(tb,m);});}
+            function sbpApplyStock(){let m=sbpSortMode();$('.sbp-sort-select').val(m);['.sbp-stock-table','#sbp-stock-advice-table','.sbp-shipment'].forEach(function(t){$(t+' tbody').each(function(){sbpSortRows($(this),m);});});}
             $(document).on('change','.sbp-sort-select',function(){sbpSortSave($(this).val());sbpApplyStock();});
             sbpApplyStock();
             let quickProduct=null;
