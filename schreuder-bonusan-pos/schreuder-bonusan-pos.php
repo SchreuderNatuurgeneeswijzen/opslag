@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.17.0
+ * Version: 1.17.1
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.17.0';
+    const VERSION = '1.17.1';
 
     private static $instance = null;
 
@@ -2128,12 +2128,92 @@ final class Schreuder_Bonusan_POS {
         return $out;
     }
 
-    private function forecast_line( $it ) {
-        $fmt = function ( $n ) { return rtrim( rtrim( number_format( (float)$n, 1, ',', '' ), '0' ), ',' ); };
-        $line = '- ' . $it['name'] . ( '' !== $it['sku'] ? ' (' . $it['sku'] . ')' : '' ) . ' – ' . $it['label'] . ': voorraad ' . $fmt( $it['stock'] )
-            . ( $it['onway'] > 0 ? ' (+' . $fmt( $it['onway'] ) . ' onderweg)' : '' ) . ', minimum ' . $fmt( $it['min'] ) . ', gewenst ' . $fmt( $it['target'] ) . ' – ';
-        if ( $it['days'] <= 0 ) { return $line . 'zit al op of onder het minimum' . ( $it['order_qty'] > 0 ? ': bestel ' . $fmt( $it['order_qty'] ) . ' stuks (tot gewenst' . ( 'transfer' === $it['mode'] ? ', ook voor aanvulling van Haarlem/Zwolle' : '' ) . ').' : '.' ); }
-        return $line . 'op het minimum over ca. ' . ceil( $it['days'] ) . ' dagen (rond ' . wp_date( 'd-m-Y', time() + (int) round( $it['days'] * DAY_IN_SECONDS ) ) . '), tempo ca. ' . $fmt( $it['daily'] ) . ' per dag.';
+    /** Verdeelt de signaalregels in secties: andere fabrikant / Bonusan, en per sectie "nu bestellen" / "binnenkort". Binnen een tabel op productnaam. */
+    private function forecast_sections( $send ) {
+        $sections = array(
+            'supplier' => array( 'title' => 'Bij een andere fabrikant bestellen (niet via Bonusan)', 'now' => array(), 'soon' => array() ),
+            'bonusan'  => array( 'title' => 'Via Bonusan (turflijst)', 'now' => array(), 'soon' => array() ),
+        );
+        foreach ( $send as $it ) {
+            $sec = ( 'transfer' === $it['mode'] || 'bonusan' !== $it['route'] ) ? 'supplier' : 'bonusan';
+            $sections[$sec][ $it['days'] <= 0 ? 'now' : 'soon' ][] = $it;
+        }
+        foreach ( $sections as $k => $sec ) {
+            usort( $sections[$k]['now'], function ( $a, $b ) { return strnatcasecmp( $a['name'], $b['name'] ); } );
+            usort( $sections[$k]['soon'], function ( $a, $b ) { return $a['days'] <=> $b['days']; } );
+        }
+        return $sections;
+    }
+
+    private function forecast_num( $n ) { return rtrim( rtrim( number_format( (float)$n, 1, ',', '' ), '0' ), ',' ); }
+
+    private function forecast_mail_text( $send, $lead ) {
+        $out = "VOORRAADSIGNAAL – " . count( $send ) . " product(en)\n";
+        foreach ( $this->forecast_sections( $send ) as $sec ) {
+            if ( ! $sec['now'] && ! $sec['soon'] ) { continue; }
+            $out .= "\n== " . strtoupper( $sec['title'] ) . " ==\n";
+            if ( $sec['now'] ) {
+                $out .= "\nNu bestellen (" . count( $sec['now'] ) . "):\n";
+                foreach ( $sec['now'] as $it ) {
+                    $out .= '- ' . $it['name'] . ( '' !== $it['sku'] ? ' (' . $it['sku'] . ')' : '' ) . ' – ' . $it['label'] . ': voorraad ' . $this->forecast_num( $it['stock'] )
+                        . ( $it['onway'] > 0 ? ' (+' . $this->forecast_num( $it['onway'] ) . ' onderweg)' : '' ) . ', min ' . $this->forecast_num( $it['min'] ) . ', gewenst ' . $this->forecast_num( $it['target'] )
+                        . ( $it['order_qty'] > 0 ? ' → BESTEL ' . $this->forecast_num( $it['order_qty'] ) : '' ) . "\n";
+                }
+            }
+            if ( $sec['soon'] ) {
+                $out .= "\nBinnen {$lead} dagen op het minimum (" . count( $sec['soon'] ) . "):\n";
+                foreach ( $sec['soon'] as $it ) {
+                    $out .= '- ' . $it['name'] . ( '' !== $it['sku'] ? ' (' . $it['sku'] . ')' : '' ) . ' – ' . $it['label'] . ': voorraad ' . $this->forecast_num( $it['stock'] )
+                        . ', min ' . $this->forecast_num( $it['min'] ) . ', gewenst ' . $this->forecast_num( $it['target'] ) . ' → over ca. ' . ceil( $it['days'] ) . " dagen\n";
+                }
+            }
+        }
+        return $out . "\nLineaire inschatting op basis van het verkooptempo van de laatste 30–90 dagen. Aanvuladvies: " . admin_url( 'admin.php?page=schreuder-bonusan-stock' ) . "\n";
+    }
+
+    private function forecast_mail_html( $send, $lead ) {
+        $th = 'style="text-align:left;padding:6px 8px;background:#f0f0f1;border-bottom:2px solid #c3c4c7;font-size:12px;color:#50575e"';
+        $thr = 'style="text-align:right;padding:6px 8px;background:#f0f0f1;border-bottom:2px solid #c3c4c7;font-size:12px;color:#50575e"';
+        $td = 'style="padding:6px 8px;border-bottom:1px solid #e0e0e0;font-size:13px;vertical-align:top"';
+        $tdr = 'style="padding:6px 8px;border-bottom:1px solid #e0e0e0;font-size:13px;text-align:right;vertical-align:top"';
+        $n_now = 0; $n_soon = 0;
+        $sections = $this->forecast_sections( $send );
+        foreach ( $sections as $sec ) { $n_now += count( $sec['now'] ); $n_soon += count( $sec['soon'] ); }
+        $h = '<div style="font-family:Arial,Helvetica,sans-serif;color:#1d2327;max-width:900px">';
+        $h .= '<h2 style="margin:0 0 4px">Voorraadsignaal</h2>';
+        $h .= '<p style="margin:0 0 16px;font-size:14px"><strong style="color:#b32d2e">' . (int)$n_now . ' nu bestellen</strong> &nbsp;·&nbsp; <strong style="color:#996800">' . (int)$n_soon . ' binnen ' . (int)$lead . ' dagen op het minimum</strong></p>';
+        foreach ( $sections as $skey => $sec ) {
+            if ( ! $sec['now'] && ! $sec['soon'] ) { continue; }
+            $h .= '<h3 style="margin:22px 0 6px;padding:6px 10px;background:#1d2327;color:#fff;font-size:15px">' . esc_html( $sec['title'] ) . '</h3>';
+            if ( $sec['now'] ) {
+                $h .= '<p style="margin:10px 0 4px;font-weight:bold;color:#b32d2e">Nu bestellen (' . count( $sec['now'] ) . ')</p>';
+                $h .= '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;table-layout:fixed"><colgroup><col style="width:38%"><col style="width:13%"><col style="width:15%"><col style="width:10%"><col style="width:12%"><col style="width:12%"></colgroup><tr><th ' . $th . '>Product</th><th ' . $th . '>Locatie</th><th ' . $thr . '>Voorraad</th><th ' . $thr . '>Min</th><th ' . $thr . '>Gewenst</th><th ' . $thr . '>Bestel</th></tr>';
+                foreach ( $sec['now'] as $it ) {
+                    $h .= '<tr><td ' . $td . '><strong>' . esc_html( $it['name'] ) . '</strong>' . ( '' !== $it['sku'] ? '<br><span style="color:#787c82;font-size:12px">' . esc_html( $it['sku'] ) . '</span>' : '' ) . '</td>'
+                        . '<td ' . $td . '>' . esc_html( $it['label'] ) . '</td>'
+                        . '<td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['stock'] ) ) . ( $it['onway'] > 0 ? '<br><span style="color:#787c82;font-size:12px">+' . esc_html( $this->forecast_num( $it['onway'] ) ) . ' onderweg</span>' : '' ) . '</td>'
+                        . '<td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['min'] ) ) . '</td><td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['target'] ) ) . '</td>'
+                        . '<td ' . $tdr . '><strong style="font-size:15px">' . ( $it['order_qty'] > 0 ? esc_html( $this->forecast_num( $it['order_qty'] ) ) : '—' ) . '</strong></td></tr>';
+                }
+                $h .= '</table>';
+                if ( 'supplier' === $skey ) { $h .= '<p style="margin:4px 0 0;font-size:12px;color:#787c82">Het aantal om te bestellen is inclusief wat Haarlem en Zwolle nodig hebben.</p>'; }
+            }
+            if ( $sec['soon'] ) {
+                $h .= '<p style="margin:14px 0 4px;font-weight:bold;color:#996800">Binnen ' . (int)$lead . ' dagen op het minimum (' . count( $sec['soon'] ) . ')</p>';
+                $h .= '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;table-layout:fixed"><colgroup><col style="width:38%"><col style="width:13%"><col style="width:15%"><col style="width:10%"><col style="width:12%"><col style="width:12%"></colgroup><tr><th ' . $th . '>Product</th><th ' . $th . '>Locatie</th><th ' . $thr . '>Voorraad</th><th ' . $thr . '>Min</th><th ' . $thr . '>Gewenst</th><th ' . $thr . '>Verwacht</th></tr>';
+                foreach ( $sec['soon'] as $it ) {
+                    $h .= '<tr><td ' . $td . '><strong>' . esc_html( $it['name'] ) . '</strong>' . ( '' !== $it['sku'] ? '<br><span style="color:#787c82;font-size:12px">' . esc_html( $it['sku'] ) . '</span>' : '' ) . '</td>'
+                        . '<td ' . $td . '>' . esc_html( $it['label'] ) . '</td>'
+                        . '<td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['stock'] ) ) . ( $it['onway'] > 0 ? '<br><span style="color:#787c82;font-size:12px">+' . esc_html( $this->forecast_num( $it['onway'] ) ) . ' onderweg</span>' : '' ) . '</td>'
+                        . '<td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['min'] ) ) . '</td><td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['target'] ) ) . '</td>'
+                        . '<td ' . $tdr . '>over ca. ' . (int) ceil( $it['days'] ) . ' dagen<br><span style="color:#787c82;font-size:12px">rond ' . esc_html( wp_date( 'd-m-Y', time() + (int) round( $it['days'] * DAY_IN_SECONDS ) ) ) . '</span></td></tr>';
+                }
+                $h .= '</table>';
+            }
+        }
+        $h .= '<p style="margin:22px 0 0"><a href="' . esc_url( admin_url( 'admin.php?page=schreuder-bonusan-stock' ) ) . '" style="background:#2271b1;color:#fff;padding:9px 16px;text-decoration:none;border-radius:3px;font-size:14px">Open het aanvuladvies</a></p>';
+        $h .= '<p style="margin:14px 0 0;font-size:12px;color:#787c82">Lineaire inschatting op basis van het verkooptempo van de laatste 30–90 dagen; seizoenspieken zijn niet meegenomen. Per product en locatie volgt één mail, een herinnering na 7 dagen zolang het niet is besteld of aangevuld.</p></div>';
+        return $h;
     }
 
     public function ensure_forecast_cron() {
@@ -2164,15 +2244,12 @@ final class Schreuder_Bonusan_POS {
         if ( '' === $to ) { $to = 'nick@schreuder-natuurgeneeswijzen.nl'; }
         if ( '' === $to ) { $to = (string) get_option( 'admin_email' ); }
         $lead = max( 1, min( 60, (int)( $s['forecast_days'] ?? 14 ) ) );
-        $groups = array( 'supplier' => array(), 'bonusan' => array() );
-        foreach ( $send as $it ) { $groups[ ( 'transfer' === $it['mode'] || 'bonusan' !== $it['route'] ) ? 'supplier' : 'bonusan' ][] = $this->forecast_line( $it ); }
-        $parts = array();
-        if ( $groups['supplier'] ) { $parts[] = "Bij een andere fabrikant bestellen (niet via Bonusan):\n" . implode( "\n", $groups['supplier'] ); }
-        if ( $groups['bonusan'] ) { $parts[] = "Via Bonusan (turflijst):\n" . implode( "\n", $groups['bonusan'] ); }
-        $body = "Voorraadsignaal Schreuder: producten die binnen {$lead} dagen op het minimum komen of er al op of onder zitten en waarvoor nog niet genoeg is besteld of onderweg.\n\n"
-            . implode( "\n\n", $parts )
-            . "\n\nDit is een lineaire inschatting op basis van het verkooptempo van de laatste 30–90 dagen; seizoenspieken zijn niet meegenomen. Bekijk het aanvuladvies: " . admin_url( 'admin.php?page=schreuder-bonusan-stock' ) . "\n";
-        wp_mail( $to, 'Voorraadsignaal: ' . count( $send ) . ' product(en) bijna op minimum', $body );
+        $plain = $this->forecast_mail_text( $send, $lead );
+        $html = $this->forecast_mail_html( $send, $lead );
+        $alt = function ( $mailer ) use ( $plain ) { $mailer->AltBody = $plain; };
+        add_filter( 'phpmailer_init', $alt );
+        wp_mail( $to, 'Voorraadsignaal: ' . count( $send ) . ' product(en) bestellen of bijna op minimum', $html, array( 'Content-Type: text/html; charset=UTF-8' ) );
+        remove_filter( 'phpmailer_init', $alt );
         return count( $send );
     }
 

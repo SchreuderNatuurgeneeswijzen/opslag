@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.17.0
+Stable tag: 1.17.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.17.1 =
+* Voorraadsignaal-mail opnieuw opgemaakt: een overzichtelijke HTML-mail met bovenaan het aantal (nu bestellen / binnen X dagen), per sectie (andere fabrikant, Bonusan) twee tabellen "Nu bestellen" (met een Bestel-kolom) en "Binnen X dagen op het minimum" (met verwachte datum), op productnaam of urgentie gesorteerd, en een knop naar het aanvuladvies. Er gaat ook een platte-tekstversie mee.
 
 = 1.17.0 =
 * Voorraadsignaal voor producten die je niet bij Bonusan bestelt (verborgen in de webshop, niet op de turflijst; Baarn is de hoofdvoorraad): het signaal draait nu om Baarn nadat Haarlem en Zwolle zijn aangevuld. Zit Baarn daarna op of onder het minimum, of komt het daar binnen de ingestelde dagen (standaard 14) op basis van het gezamenlijke verkooptempo van alle locaties, dan krijg je een melding en een e-mail met het aantal om te bestellen tot de gewenste voorraad (inclusief wat Haarlem/Zwolle nodig hebben). Haarlem en Zwolle geven voor zulke producten geen leverancierssignaal meer; dat is een interne aanvulling vanuit Baarn.
