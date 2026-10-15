@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.16.2
+ * Version: 1.16.3
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.16.2';
+    const VERSION = '1.16.3';
 
     private static $instance = null;
 
@@ -465,6 +465,7 @@ final class Schreuder_Bonusan_POS {
         try {
             $data = $this->build_preview_from_request();
             $draft_restored = $this->restore_draft( $data );
+            $this->annotate_stock_notes( $data['items'], (string)$data['location'] );
             $token = wp_generate_password( 24, false, false );
             $data['user_id'] = get_current_user_id();
             set_transient( 'sbp_' . $token, $data, DAY_IN_SECONDS );
@@ -603,6 +604,9 @@ final class Schreuder_Bonusan_POS {
         uasort( $data['items'], function($a,$b) use ($template_map){
             return ($template_map[$this->normalize_sku($a['sku'])]['row'] ?? 999999) <=> ($template_map[$this->normalize_sku($b['sku'])]['row'] ?? 999999);
         } );
+        $one = array( $item_key => $data['items'][$item_key] );
+        $this->annotate_stock_notes( $one, (string)( $data['location'] ?? '' ) );
+        $data['items'][$item_key] = $one[$item_key];
         set_transient( 'sbp_' . $token, $data, DAY_IN_SECONDS );
         $this->save_draft( $data );
         wp_send_json_success( array( 'item' => $data['items'][$item_key] ) );
@@ -1002,6 +1006,34 @@ final class Schreuder_Bonusan_POS {
             $items[$k]['qty'] = $qty;
             $items[$k]['default_qty'] = $qty;
             $items[$k]['stock_rule'] = true;
+        }
+    }
+
+    /**
+     * Zet bij elke regel zonder voorraadnotitie (handmatig toegevoegd, of geen voorraadregel van toepassing)
+     * wat de voorraad, het minimum en de gewenste voorraad van deze locatie zijn. Wijzigt nooit een aantal.
+     */
+    private function annotate_stock_notes( &$items, $location ) {
+        if ( ! array_key_exists( $location, $this->stock_locations() ) ) { return; }
+        $fmt = function ( $n ) { return rtrim( rtrim( number_format( (float)$n, 2, ',', '' ), '0' ), ',' ); };
+        foreach ( $items as $k => $item ) {
+            if ( '' !== (string)( $item['stock_note'] ?? '' ) ) { continue; }
+            $pid = wc_get_product_id_by_sku( (string)( $item['sku'] ?? '' ) );
+            $product = $pid ? wc_get_product( $pid ) : false;
+            $tid = $product ? $this->tracked_id_for_product( $product ) : 0;
+            if ( ! $tid ) { $items[$k]['stock_note'] = 'Staat niet in Locatievoorraad: geen voorraadgegevens.'; continue; }
+            if ( ! $this->tracked_since( $tid ) ) { $items[$k]['stock_note'] = 'Wacht op beginvoorraad: nog geen voorraadgegevens.'; continue; }
+            $this->preload_stock( array( $tid ) );
+            $st = $this->get_stock_state( $tid );
+            $onway = (float)( SBP_Ledger::in_transit( array( $tid ) )[$tid][$location] ?? 0 );
+            $note = 'Voorraad ' . $fmt( $st[$location] ) . ( $onway > 0 ? ' + ' . $fmt( $onway ) . ' onderweg' : '' ) . ', minimum ' . $fmt( $st[$location.'_min'] ) . ', gewenst ' . $fmt( $st[$location.'_target'] );
+            if ( 'direct' !== $this->stock_mode( $product ) ) { $note .= ' (wordt vanuit Baarn geleverd)'; }
+            elseif ( $st[$location.'_target'] <= 0 ) { $note .= ' (geen gewenste voorraad ingesteld)'; }
+            else {
+                $gap = (float) ceil( max( 0, $st[$location.'_target'] - $st[$location] - $onway ) );
+                $note .= ' → tot gewenst: ' . $fmt( $gap );
+            }
+            $items[$k]['stock_note'] = $note . '.';
         }
     }
 

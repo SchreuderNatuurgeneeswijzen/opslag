@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.16.2
+Stable tag: 1.16.3
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.16.3 =
+* In de bestellijst (controle vóór het verzenden) staan nu bij álle regels de voorraad, het minimum en de gewenste voorraad van die locatie, ook bij handmatig toegevoegde producten en producten zonder voorraadregel (met het aantal tot gewenst, of de reden waarom er geen voorraadgegevens zijn). Aantallen worden hierdoor niet gewijzigd.
 
 = 1.16.2 =
 * In het aanvuladvies (Bonusan bestelling en Locatievoorraad) staan nu per locatie de voorraad, het minimum en de gewenste voorraad, plus wat er onderweg is, zodat je het geadviseerde aantal kunt controleren.
