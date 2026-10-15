@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.16.3
+Stable tag: 1.17.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,10 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.17.0 =
+* Voorraadsignaal voor producten die je niet bij Bonusan bestelt (verborgen in de webshop, niet op de turflijst; Baarn is de hoofdvoorraad): het signaal draait nu om Baarn nadat Haarlem en Zwolle zijn aangevuld. Zit Baarn daarna op of onder het minimum, of komt het daar binnen de ingestelde dagen (standaard 14) op basis van het gezamenlijke verkooptempo van alle locaties, dan krijg je een melding en een e-mail met het aantal om te bestellen tot de gewenste voorraad (inclusief wat Haarlem/Zwolle nodig hebben). Haarlem en Zwolle geven voor zulke producten geen leverancierssignaal meer; dat is een interne aanvulling vanuit Baarn.
+* De e-mail is verdeeld in "Bij een andere fabrikant bestellen" en "Via Bonusan (turflijst)" en gaat standaard naar nick@schreuder-natuurgeneeswijzen.nl (instelbaar onder Voorraadsignaal vooraf).
 
 = 1.16.3 =
 * In de bestellijst (controle vóór het verzenden) staan nu bij álle regels de voorraad, het minimum en de gewenste voorraad van die locatie, ook bij handmatig toegevoegde producten en producten zonder voorraadregel (met het aantal tot gewenst, of de reden waarom er geen voorraadgegevens zijn). Aantallen worden hierdoor niet gewijzigd.
