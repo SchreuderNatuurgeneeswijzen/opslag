@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.18.1
+ * Version: 1.19.0
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.18.1';
+    const VERSION = '1.19.0';
 
     private static $instance = null;
 
@@ -148,6 +148,7 @@ final class Schreuder_Bonusan_POS {
         $out['forecast_days'] = max( 1, min( 60, (int)( $input['forecast_days'] ?? 14 ) ) );
         $out['forecast_email'] = ( isset( $input['forecast_email'] ) && 'no' === $input['forecast_email'] ) ? 'no' : 'yes';
         $out['forecast_recipient'] = sanitize_email( $input['forecast_recipient'] ?? '' );
+        $out['ship_by_status'] = ( isset( $input['ship_by_status'] ) && 'no' === $input['ship_by_status'] ) ? 'no' : 'yes';
         $out['stock_rule_orders'] = ( isset( $input['stock_rule_orders'] ) && 'no' === $input['stock_rule_orders'] ) ? 'no' : 'yes';
         return $out;
     }
@@ -165,6 +166,8 @@ final class Schreuder_Bonusan_POS {
             'extra_register_meta' => '',
             // Bestelaantal op de turflijst volgt de voorraad (gevolgde producten met gewenste voorraad).
             'stock_rule_orders' => 'yes',
+            // Een kassa-order die ooit "in behandeling" heeft gestaan is door Bonusan verstuurd en geen kassaverkoop.
+            'ship_by_status' => 'yes',
             // Voorraadsignaal: waarschuw zoveel dagen voordat het minimum naar verwachting wordt bereikt.
             'forecast_days' => 14,
             'forecast_email' => 'yes',
@@ -212,6 +215,7 @@ final class Schreuder_Bonusan_POS {
                     <tr><th>YITH locatiekenmerk Zwolle</th><td><input class="regular-text" type="text" name="<?php echo esc_attr(self::OPTION); ?>[location_meta][zwolle]" value="<?php echo esc_attr($s['location_meta']['zwolle']); ?>"></td></tr>
                     <tr><th>Kenmerk extra kassa</th><td><input class="regular-text" type="text" name="<?php echo esc_attr(self::OPTION); ?>[extra_register_meta]" value="<?php echo esc_attr($s['extra_register_meta'] ?? ''); ?>"><p class="description">Register-ID('s) van de extra kassa (komma-gescheiden). Verkopen van deze kassa horen bij geen enkele locatie totdat je in het controlescherm (of bij Locatievoorraad) Baarn, Haarlem of Zwolle hebt gekozen. Ook onbekende kassa's, zoals een testkassa, wachten op een keuze.</p></td></tr>
                     <tr><th>Voorraadsignaal vooraf</th><td><input type="number" min="1" max="60" class="small-text" name="<?php echo esc_attr(self::OPTION); ?>[forecast_days]" value="<?php echo esc_attr( (int)( $s['forecast_days'] ?? 14 ) ); ?>"> dagen vooraf<br><label><select name="<?php echo esc_attr(self::OPTION); ?>[forecast_email]"><option value="yes"<?php selected( $s['forecast_email'] ?? 'yes', 'yes' ); ?>>Dagelijks e-mailen</option><option value="no"<?php selected( $s['forecast_email'] ?? 'yes', 'no' ); ?>>Geen e-mail (alleen melding in WordPress)</option></select></label> aan <input type="email" class="regular-text" name="<?php echo esc_attr(self::OPTION); ?>[forecast_recipient]" value="<?php echo esc_attr( $s['forecast_recipient'] ?? '' ); ?>" placeholder="leeg = nick@schreuder-natuurgeneeswijzen.nl"><p class="description">Je krijgt een signaal als een gevolgd product naar verwachting binnen dit aantal dagen op het minimum komt (op basis van het verkooptempo van de laatste 30–90 dagen), of er al op of onder zit, en er nog niet genoeg is besteld of onderweg. Per product en locatie volgt één e-mail, een herinnering na 7 dagen zolang het niet is opgelost. <a href="<?php echo esc_url( wp_nonce_url( admin_url( 'admin-post.php?action=sbp_forecast_now' ), 'sbp_forecast_now' ) ); ?>">Stuur nu een controle-e-mail</a> (sla eerst je instellingen op).</p></td></tr>
+                    <tr><th>Kassa-order die "in behandeling" stond</th><td><select name="<?php echo esc_attr(self::OPTION); ?>[ship_by_status]"><option value="yes"<?php selected( $s['ship_by_status'] ?? 'yes', 'yes' ); ?>>Ja: dit is een verzending via Bonusan (geen kassaverkoop)</option><option value="no"<?php selected( $s['ship_by_status'] ?? 'yes', 'no' ); ?>>Nee: behandel het als gewone kassaverkoop</option></select><p class="description">Een gewone winkelverkoop in de kassa staat meteen op Afgerond. Kies je in de kassa een verzendmethode, dan blijft de order in behandeling en verstuurt Bonusan hem. Bij Ja boekt zo'n order nooit af van de locatievoorraad en telt hij op de Bonusan-bestelling als webshopverkoop, ook nadat je hem hebt afgerond. De plugin leest dat uit de statusgeschiedenis (ordernotities "Orderstatus gewijzigd van In behandeling naar …"). Let op: een winkelverkoop per bankoverschrijving die ook eerst in behandeling staat, wordt dan ook als verzending gezien.</p></td></tr>
                     <tr><th>Turflijst volgt voorraad</th><td><select name="<?php echo esc_attr(self::OPTION); ?>[stock_rule_orders]"><option value="yes"<?php selected( $s['stock_rule_orders'] ?? 'yes', 'yes' ); ?>>Ja: bestel alleen wat nodig is</option><option value="no"<?php selected( $s['stock_rule_orders'] ?? 'yes', 'no' ); ?>>Nee: bestel altijd het verkochte aantal</option></select><p class="description">Bij Ja bestelt een gevolgd product (met beginvoorraad en een gewenste voorraad) bij Bonusan tot de gewenste voorraad: staat voorraad + onderweg onder gewenst, dan wordt het verschil besteld; is er genoeg, dan wordt het aantal 0 en gaat het product niet mee naar Bonusan. Het minimum is hier alleen een signaal (waarschuwing in het voorraadoverzicht). Bij producten die je niet bij Bonusan bestelt is het minimum wel het moment om te bestellen. Producten zonder beginvoorraad of zonder gewenste voorraad blijven op het verkochte aantal.</p></td></tr>
                 </tbody></table>
                 <?php submit_button(); ?>
@@ -1333,8 +1337,37 @@ final class Schreuder_Bonusan_POS {
      * Is dit (kassa)order een verzonden bestelling? Dat is zo zodra er een verzendmethode op staat (gratis of betaald),
      * behalve afhalen. Zo'n order wordt door Bonusan/de fabriek verstuurd en telt dus niet als kassaverkoop.
      */
+    /**
+     * Heeft deze kassa-order ooit de status "in behandeling" gehad? Gewone winkelverkopen gaan meteen naar Afgerond.
+     * Bepaald uit de huidige status, een eerder vastgelegde markering, of de statusnotities van WooCommerce.
+     * Een negatieve uitkomst wordt bewaard; de statushaak zet de markering alsnog zodra de order in behandeling komt.
+     */
+    private function was_processing( $order ) {
+        if ( ! $order ) { return false; }
+        if ( 'processing' === $order->get_status() ) { $this->mark_processing( $order, 'yes' ); return true; }
+        $m = (string) $order->get_meta( '_sbp_was_processing' );
+        if ( 'yes' === $m ) { return true; }
+        if ( 'no' === $m ) { return false; }
+        $found = false;
+        if ( function_exists( 'wc_get_order_notes' ) ) {
+            foreach ( (array) wc_get_order_notes( array( 'order_id' => (int) $order->get_id() ) ) as $note ) {
+                $text = is_object( $note ) ? (string)( $note->content ?? '' ) : '';
+                if ( preg_match( '/\b(van|from)\s+(in\s+behandeling|processing)\b/iu', $text ) ) { $found = true; break; }
+            }
+        }
+        $this->mark_processing( $order, $found ? 'yes' : 'no' );
+        return $found;
+    }
+
+    private function mark_processing( $order, $value ) {
+        if ( (string) $order->get_meta( '_sbp_was_processing' ) === $value ) { return; }
+        $order->update_meta_data( '_sbp_was_processing', $value );
+        if ( is_callable( array( $order, 'save_meta_data' ) ) ) { $order->save_meta_data(); }
+    }
+
     private function is_shipped_order( $order ) {
         if ( ! $order || ! is_callable( array( $order, 'get_items' ) ) ) { return false; }
+        if ( 'no' !== ( $this->settings()['ship_by_status'] ?? 'yes' ) && $this->is_yith_pos_order( $order ) && $this->was_processing( $order ) ) { return true; }
         foreach ( (array) $order->get_items( 'shipping' ) as $item ) {
             if ( ! is_object( $item ) || ! method_exists( $item, 'get_method_id' ) ) { continue; }
             $method = strtolower( trim( (string) $item->get_method_id() ) );
@@ -1847,7 +1880,7 @@ final class Schreuder_Bonusan_POS {
         $out = array();
         foreach ( SBP_Ledger::booked_order_ids() as $oid ) {
             $order = wc_get_order( (int)$oid );
-            if ( ! $order instanceof WC_Order || $this->is_yith_pos_order( $order ) ) { continue; }
+            if ( ! $order instanceof WC_Order || $this->is_stock_sale_order( $order ) ) { continue; }
             $b = SBP_Ledger::order_bookings( (int)$oid ); $units = 0.0; $pids = array();
             foreach ( $b as $pid => $line ) { if ( $line['qty'] > 0.0005 ) { $units += $line['qty']; $pids[] = (int)$pid; } }
             if ( $units > 0 ) { $out[(int)$oid] = array( 'units' => $units, 'pids' => $pids ); }
@@ -2111,7 +2144,11 @@ final class Schreuder_Bonusan_POS {
         if ( $dirty ) { $order->save_meta_data(); }
     }
 
-    public function on_order_status_changed( $order_id, $old_status = '', $new_status = '', $order = null ) { $this->reconcile_order( $order_id, $order ); }
+    public function on_order_status_changed( $order_id, $old_status = '', $new_status = '', $order = null ) {
+        $o = $order instanceof WC_Order ? $order : wc_get_order( (int)$order_id );
+        if ( $o instanceof WC_Order && ( 'processing' === $new_status || 'processing' === $old_status ) && $this->is_yith_pos_order( $o ) ) { $this->mark_processing( $o, 'yes' ); }
+        $this->reconcile_order( $order_id, $order );
+    }
     public function on_order_refunded( $order_id, $refund_id = 0 ) { $this->reconcile_order( $order_id ); }
     public function on_refund_deleted( $refund_id, $order_id ) { $this->reconcile_order( $order_id ); }
     public function on_order_trashed( $order_id, $order = null ) { $this->reconcile_order( $order_id, $order, true ); }
@@ -2642,9 +2679,9 @@ final class Schreuder_Bonusan_POS {
             <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=schreuder-bonusan-pos')); ?>">← Bonusan bestelling</a></p>
 
             <div class="sbp-stock-card" id="sbp-webshop-undo">
-                <h2>Webshop-afboekingen terugdraaien</h2>
-                <p class="description">Vanaf versie 1.18.0 boekt alleen een kassaverkoop af, op de locatie van die kassa. Webshoporders worden door Bonusan/de fabriek verstuurd en raken je voorraad niet. Eerdere versies boekten webshoporders wel van Baarn af. Hiermee draai je die boekingen terug (de voorraad van Baarn gaat omhoog; het logboek houdt elke terugboeking bij).</p>
-                <p><button type="button" class="button" id="sbp-webshop-scan">Controleer wat er is afgeboekt voor webshoporders</button> <span id="sbp-webshop-msg" role="status"></span></p>
+                <h2>Webshop- en verzonden afboekingen terugdraaien</h2>
+                <p class="description">Vanaf versie 1.18.0 boekt alleen een kassaverkoop af, op de locatie van die kassa. Webshoporders worden door Bonusan/de fabriek verstuurd en raken je voorraad niet. Eerdere versies boekten webshoporders wel van Baarn af, en kassa-orders die je liet versturen (in behandeling gezet) tellen als kassaverkoop zodra ze waren afgerond. Hiermee draai je die boekingen terug (de voorraad van Baarn gaat omhoog; het logboek houdt elke terugboeking bij).</p>
+                <p><button type="button" class="button" id="sbp-webshop-scan">Controleer wat er is afgeboekt voor webshop- en verzonden orders</button> <span id="sbp-webshop-msg" role="status"></span></p>
             </div>
 
             <?php if ( $pending ) : ?>

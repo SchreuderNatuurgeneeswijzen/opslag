@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.18.1
+Stable tag: 1.19.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,11 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.19.0 =
+* Kassa-orders die ooit de status "In behandeling" hebben gehad (zo komen via de kassa verzonden bestellingen binnen) worden herkend als verzending via Bonusan: ze boeken niet af van de locatievoorraad en tellen op de Bonusan-bestelling als webshopverkoop, ook nadat je ze hebt afgerond. De plugin leest dat uit de huidige status, een eigen markering (gezet zodra de order in behandeling komt of gaat) en de statusnotities van WooCommerce ("Orderstatus gewijzigd van In behandeling naar ..."). Instelbaar onder "Kassa-order die in behandeling stond" (standaard Ja).
+* Een winkelverkoop per bankoverschrijving die eerst in behandeling stond wordt daardoor ook als verzending gezien (zet de instelling op Nee als dat niet gewenst is).
+* "Webshop- en verzonden afboekingen terugdraaien" (Locatievoorraad) vindt nu ook kassa-orders die al waren afgeboekt maar achteraf een verzending bleken.
 
 = 1.18.1 =
 * Kassa-orders waar een verzendmethode op staat (gratis of betaald, behalve afhalen) worden herkend als verzonden bestelling: ze boeken niet af van de locatievoorraad en tellen op de Bonusan-bestelscherm niet als fysieke kassaverkoop maar als webshopverkoop (alleen ter informatie). Dat geldt ook na afronden en bij bankoverschrijving of openstaande factuur. Wordt een verzendmethode achteraf toegevoegd aan een al afgeboekte order, dan wordt de afboeking teruggedraaid.
