@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.17.1
+Stable tag: 1.18.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,10 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.18.0 =
+* Alleen kassaverkopen boeken nog van de locatievoorraad af, en alleen van de locatie van die kassa (Baarn-kassa van Baarn, Zwolle-kassa van Zwolle, Haarlem-kassa van Haarlem). Webshoporders worden door Bonusan/de fabriek verstuurd en spreken de voorraad niet meer aan; eerder werden ze van Baarn afgeboekt.
+* Nieuwe knop op Locatievoorraad: "Webshop-afboekingen terugdraaien". Die telt eerst hoeveel webshoporders door eerdere versies zijn afgeboekt, vraagt bevestiging en boekt die terug (elke terugboeking staat in het voorraadlogboek). Kassa-afboekingen blijven ongemoeid.
 
 = 1.17.1 =
 * Voorraadsignaal-mail opnieuw opgemaakt: een overzichtelijke HTML-mail met bovenaan het aantal (nu bestellen / binnen X dagen), per sectie (andere fabrikant, Bonusan) twee tabellen "Nu bestellen" (met een Bestel-kolom) en "Binnen X dagen op het minimum" (met verwachte datum), op productnaam of urgentie gesorteerd, en een knop naar het aanvuladvies. Er gaat ook een platte-tekstversie mee.

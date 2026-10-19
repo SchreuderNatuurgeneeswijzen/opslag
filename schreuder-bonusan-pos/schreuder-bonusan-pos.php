@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.17.1
+ * Version: 1.18.0
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.17.1';
+    const VERSION = '1.18.0';
 
     private static $instance = null;
 
@@ -66,6 +66,7 @@ final class Schreuder_Bonusan_POS {
         add_action( 'wp_ajax_sbp_stock_adjust', array( $this, 'ajax_stock_adjust' ) );
         add_action( 'wp_ajax_sbp_stock_transfer', array( $this, 'ajax_stock_transfer' ) );
         add_action( 'wp_ajax_sbp_assign_order_location', array( $this, 'ajax_assign_order_location' ) );
+        add_action( 'wp_ajax_sbp_stock_undo_webshop', array( $this, 'ajax_stock_undo_webshop' ) );
         // Voorraadboekingen zijn idempotent (zie reconcile_order); meerdere hooks per order zijn dus veilig.
         add_action( 'woocommerce_order_status_changed', array( $this, 'on_order_status_changed' ), 20, 4 );
         add_action( 'woocommerce_update_order', array( $this, 'reconcile_order' ), 50, 2 );
@@ -1400,7 +1401,7 @@ final class Schreuder_Bonusan_POS {
     /**
      * Bepaalt bij welke locatie een order hoort.
      * - Een door de gebruiker gekozen locatie (_sbp_location_stock_location) gaat altijd voor.
-     * - Webshoporders horen bij Baarn (hoofdvoorraad).
+     * - Webshoporders boeken niet af (zie is_stock_sale_order); komt er toch een locatie nodig, dan is dat Baarn.
      * - Kassa-orders: exacte vergelijking van het register-ID (of store-ID) met de instellingen.
      * - Extra kassa of onbekende kassa: '' = nog geen locatie, de gebruiker moet kiezen.
      * Er wordt nooit op losse tekst of delen van een waarde gegokt.
@@ -1826,6 +1827,38 @@ final class Schreuder_Bonusan_POS {
         return array( $applied, $problems );
     }
 
+    /** Orders die (door eerdere versies) afgeboekt zijn maar geen kassaverkoop zijn. order_id => array( 'units' => float, 'pids' => int[] ). */
+    private function webshop_booked_orders() {
+        $out = array();
+        foreach ( SBP_Ledger::booked_order_ids() as $oid ) {
+            $order = wc_get_order( (int)$oid );
+            if ( ! $order instanceof WC_Order || $this->is_yith_pos_order( $order ) ) { continue; }
+            $b = SBP_Ledger::order_bookings( (int)$oid ); $units = 0.0; $pids = array();
+            foreach ( $b as $pid => $line ) { if ( $line['qty'] > 0.0005 ) { $units += $line['qty']; $pids[] = (int)$pid; } }
+            if ( $units > 0 ) { $out[(int)$oid] = array( 'units' => $units, 'pids' => $pids ); }
+        }
+        return $out;
+    }
+
+    /** dry=1: telt alleen. Anders draait tot 100 webshoporders terug (reconcile_order ziet dat het geen kassaverkoop is en boekt terug). */
+    public function ajax_stock_undo_webshop() {
+        $this->guard();
+        $list = $this->webshop_booked_orders();
+        if ( ! empty( $_POST['dry'] ) ) {
+            $units = 0.0; $pids = array();
+            foreach ( $list as $o ) { $units += $o['units']; foreach ( $o['pids'] as $pid ) { $pids[$pid] = true; } }
+            wp_send_json_success( array( 'orders' => count( $list ), 'units' => $units, 'products' => count( $pids ) ) );
+        }
+        $done = 0;
+        foreach ( array_slice( array_keys( $list ), 0, 100 ) as $oid ) {
+            $this->last_reconcile_sig = array();
+            $this->reconcile_order( (int)$oid );
+            if ( ! SBP_Ledger::order_bookings( (int)$oid ) || array_sum( array_column( SBP_Ledger::order_bookings( (int)$oid ), 'qty' ) ) <= 0.0005 ) { $done++; }
+        }
+        $this->forget_stock_cache();
+        wp_send_json_success( array( 'done' => $done, 'remaining' => max( 0, count( $list ) - $done ) ) );
+    }
+
     /** Registreert een bestelling bij een andere leverancier als "onderweg", zodat de levering later met één klik kan worden verwerkt. */
     public function ajax_stock_register_order() {
         $this->guard();
@@ -1949,8 +1982,8 @@ final class Schreuder_Bonusan_POS {
         if ( $this->is_yith_pos_order( $order ) ) {
             return 'completed' === $order->get_status() || $this->is_pos_bank_transfer_sale( $order ) || $this->is_pos_open_invoice_sale( $order );
         }
-        // Webshopvoorraad wordt bij verwerking/afronding uit Baarn gehaald.
-        return in_array( $order->get_status(), array('processing','completed'), true );
+        // Webshoporders worden door Bonusan/de fabriek verstuurd en spreken de locatievoorraad niet aan.
+        return false;
     }
 
     /**
@@ -2589,8 +2622,14 @@ final class Schreuder_Bonusan_POS {
         ?>
         <div class="wrap sbp-stock-wrap">
             <h1>Locatievoorraad</h1>
-            <p><strong>Baarn is de hoofdvoorraad</strong> voor de producten die je hier volgt. Haarlem en Zwolle hebben een kleinere werkvoorraad. <strong>Alleen producten die Bonusan niet kan leveren (verborgen in de webshop) worden vanuit Baarn naar Haarlem en Zwolle aangevuld.</strong> Alle andere gevolgde producten bestellen Haarlem en Zwolle zelf bij Bonusan via de turflijst; daarvoor geeft het advies alleen aan hoeveel die locatie zelf moet bestellen. Je kunt de wijze per product aanpassen. Gewone webshopverkopen worden standaard van Baarn afgeboekt. Vaste POS-locaties worden automatisch herkend wanneer het YITH locatiekenmerk is ingesteld; een onbekende/extra kassa komt hieronder te staan totdat je de locatie kiest.</p>
+            <p><strong>Baarn is de hoofdvoorraad</strong> voor de producten die je hier volgt. Haarlem en Zwolle hebben een kleinere werkvoorraad. <strong>Alleen producten die Bonusan niet kan leveren (verborgen in de webshop) worden vanuit Baarn naar Haarlem en Zwolle aangevuld.</strong> Alle andere gevolgde producten bestellen Haarlem en Zwolle zelf bij Bonusan via de turflijst; daarvoor geeft het advies alleen aan hoeveel die locatie zelf moet bestellen. Je kunt de wijze per product aanpassen. Alleen kassaverkopen worden afgeboekt (webshoporders worden door Bonusan verstuurd). Vaste POS-locaties worden automatisch herkend wanneer het YITH locatiekenmerk is ingesteld; een onbekende/extra kassa komt hieronder te staan totdat je de locatie kiest.</p>
             <p><a class="button" href="<?php echo esc_url(admin_url('admin.php?page=schreuder-bonusan-pos')); ?>">← Bonusan bestelling</a></p>
+
+            <div class="sbp-stock-card" id="sbp-webshop-undo">
+                <h2>Webshop-afboekingen terugdraaien</h2>
+                <p class="description">Vanaf versie 1.18.0 boekt alleen een kassaverkoop af, op de locatie van die kassa. Webshoporders worden door Bonusan/de fabriek verstuurd en raken je voorraad niet. Eerdere versies boekten webshoporders wel van Baarn af. Hiermee draai je die boekingen terug (de voorraad van Baarn gaat omhoog; het logboek houdt elke terugboeking bij).</p>
+                <p><button type="button" class="button" id="sbp-webshop-scan">Controleer wat er is afgeboekt voor webshoporders</button> <span id="sbp-webshop-msg" role="status"></span></p>
+            </div>
 
             <?php if ( $pending ) : ?>
             <div class="sbp-stock-card" id="sbp-pending-orders">
@@ -2848,6 +2887,23 @@ final class Schreuder_Bonusan_POS {
                 roToggle();$('#sbp-ro-table tbody tr:last input').trigger('focus');
             });
             $(document).on('click','.sbp-ro-del',function(){$(this).closest('tr').remove();roToggle();});
+            $('#sbp-webshop-scan').on('click',function(){
+                let b=$(this).prop('disabled',true),msg=$('#sbp-webshop-msg').css('color','').text('Controleren…');
+                post('sbp_stock_undo_webshop',{dry:1}).done(function(r){
+                    if(!r.success){b.prop('disabled',false);return;}
+                    let d=r.data; if(!d.orders){msg.css('color','#00700a').text('✓ Niets terug te draaien: er staan geen webshoporders afgeboekt.');b.prop('disabled',false);return;}
+                    if(!confirm(d.orders+' webshoporder(s) hebben samen '+d.units+' stuks afgeboekt ('+d.products+' product(en)). Terugdraaien?\n\nDe voorraad gaat met dat aantal omhoog; elke boeking blijft in het logboek.')){msg.text('Geannuleerd.');b.prop('disabled',false);return;}
+                    let total=0;
+                    (function step(){
+                        post('sbp_stock_undo_webshop',{}).done(function(r2){
+                            if(!r2.success){msg.css('color','#b32d2e').text('Gestopt door een fout.');b.prop('disabled',false);return;}
+                            total+=r2.data.done; msg.text('Bezig… '+total+' order(s) teruggedraaid');
+                            if(r2.data.remaining>0&&r2.data.done>0){step();}
+                            else{msg.css('color',r2.data.remaining>0?'#b32d2e':'#00700a').text((r2.data.remaining>0?'Klaar, maar '+r2.data.remaining+' order(s) konden niet worden teruggedraaid (zie foutlog). ':'✓ ')+total+' order(s) teruggedraaid. Pagina wordt herladen…');if(!r2.data.remaining){setTimeout(function(){location.reload();},1500);}else{b.prop('disabled',false);}}
+                        }).fail(function(){b.prop('disabled',false);});
+                    })();
+                }).fail(function(){b.prop('disabled',false);});
+            });
             $('#sbp-ro-save').on('click',function(){
                 let lines=[];$('#sbp-ro-table tbody tr').each(function(){lines.push({id:$(this).data('id'),qty:$(this).find('.sbp-ro-qty').val()});});
                 let b=$(this).prop('disabled',true);

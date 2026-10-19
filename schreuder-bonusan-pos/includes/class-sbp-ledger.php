@@ -231,6 +231,14 @@ final class SBP_Ledger {
         return $out;
     }
 
+    /** Order-ID's met een positief netto geboekt aantal. */
+    public static function booked_order_ids() {
+        global $wpdb;
+        $t = self::ledger_table();
+        $in = "'" . implode( "','", self::ORDER_REASONS ) . "'";
+        return array_map( 'intval', (array) $wpdb->get_col( "SELECT order_id FROM $t WHERE order_id > 0 AND reason IN ($in) GROUP BY order_id HAVING SUM(order_qty) > 0.0005 ORDER BY order_id ASC" ) );
+    }
+
     /** Netto verkocht (verkopen min retouren) over 30 en 90 dagen. product_id => location => array( d30, d90 ) */
     public static function sales_velocity( array $product_ids ) {
         global $wpdb;
