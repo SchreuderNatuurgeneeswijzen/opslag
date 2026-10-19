@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.18.0
+Stable tag: 1.18.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.18.1 =
+* Kassa-orders waar een verzendmethode op staat (gratis of betaald, behalve afhalen) worden herkend als verzonden bestelling: ze boeken niet af van de locatievoorraad en tellen op de Bonusan-bestelscherm niet als fysieke kassaverkoop maar als webshopverkoop (alleen ter informatie). Dat geldt ook na afronden en bij bankoverschrijving of openstaande factuur. Wordt een verzendmethode achteraf toegevoegd aan een al afgeboekte order, dan wordt de afboeking teruggedraaid.
 
 = 1.18.0 =
 * Alleen kassaverkopen boeken nog van de locatievoorraad af, en alleen van de locatie van die kassa (Baarn-kassa van Baarn, Zwolle-kassa van Zwolle, Haarlem-kassa van Haarlem). Webshoporders worden door Bonusan/de fabriek verstuurd en spreken de voorraad niet meer aan; eerder werden ze van Baarn afgeboekt.

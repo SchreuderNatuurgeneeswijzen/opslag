@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.18.0
+ * Version: 1.18.1
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.18.0';
+    const VERSION = '1.18.1';
 
     private static $instance = null;
 
@@ -1068,7 +1068,7 @@ final class Schreuder_Bonusan_POS {
             // Fysieke kassaverkoop: afgerond, of een POS-verkoop via bankoverschrijving/Openstaand
             // factuur. De turflijst volgt wat fysiek is meegegeven, niet alleen wat betaald is.
             // Een gewone webshoporder is nooit een fysieke kassaverkoop, ook niet als hij is afgerond.
-            $physical = $is_pos && ( 'completed' === $order->get_status() || $this->is_pos_bank_transfer_sale( $order ) || $this->is_pos_open_invoice_sale( $order ) );
+            $physical = $is_pos && ! $this->is_shipped_order( $order ) && ( 'completed' === $order->get_status() || $this->is_pos_bank_transfer_sale( $order ) || $this->is_pos_open_invoice_sale( $order ) );
 
             // Locatie van de order: expliciet gekozen, anders uit het register-ID van de kassa.
             // '' = onbekende/extra kassa: nog niet besteld totdat de gebruiker een locatie kiest.
@@ -1327,6 +1327,21 @@ final class Schreuder_Bonusan_POS {
             }
         }
         return '';
+    }
+
+    /**
+     * Is dit (kassa)order een verzonden bestelling? Dat is zo zodra er een verzendmethode op staat (gratis of betaald),
+     * behalve afhalen. Zo'n order wordt door Bonusan/de fabriek verstuurd en telt dus niet als kassaverkoop.
+     */
+    private function is_shipped_order( $order ) {
+        if ( ! $order || ! is_callable( array( $order, 'get_items' ) ) ) { return false; }
+        foreach ( (array) $order->get_items( 'shipping' ) as $item ) {
+            if ( ! is_object( $item ) || ! method_exists( $item, 'get_method_id' ) ) { continue; }
+            $method = strtolower( trim( (string) $item->get_method_id() ) );
+            if ( '' === $method || in_array( $method, array( 'local_pickup', 'pickup_location' ), true ) ) { continue; }
+            return true;
+        }
+        return false;
     }
 
     private function is_pos_open_invoice_sale( $order ) {
@@ -1980,6 +1995,7 @@ final class Schreuder_Bonusan_POS {
     private function is_stock_sale_order( $order ) {
         if ( ! $order || in_array( $order->get_status(), array('cancelled','refunded','failed','trash'), true ) ) { return false; }
         if ( $this->is_yith_pos_order( $order ) ) {
+            if ( $this->is_shipped_order( $order ) ) { return false; } // via de kassa verzonden: net als een webshoporder
             return 'completed' === $order->get_status() || $this->is_pos_bank_transfer_sale( $order ) || $this->is_pos_open_invoice_sale( $order );
         }
         // Webshoporders worden door Bonusan/de fabriek verstuurd en spreken de locatievoorraad niet aan.
