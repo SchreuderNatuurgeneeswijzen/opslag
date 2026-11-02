@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.19.0
+Stable tag: 1.20.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -51,7 +51,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 == Changelog ==
 
-= Volgende versie (nog niet uitgebracht) =
+= 1.20.0 =
+* Aanvuladvies met kleuren en filter (Locatievoorraad): bovenaan drie knoppen met het aantal producten: Rood (voorraad leeg of negatief: controleer hoe dit komt), Oranje (op of onder het minimum: direct bestellen, met het aantal) en Geel (komt binnen het ingestelde aantal dagen op het minimum). Standaard staan alleen die drie in de lijst, rood bovenaan; je kunt kleuren aan- en uitzetten. Met het zoekveld vind je ook een product zonder melding, en "Toon alle producten" laat de hele lijst zien. Per regel staat in woorden waarom (en voor welke locatie), zodat het niet alleen aan de kleur hangt.
+* Hetzelfde kleurbadge en dezelfde sortering staan in het aanvuladvies op het scherm Bonusan bestelling (daar blijft de lijst ongefilterd, omdat dit het bestelvoorstel per locatie is).
 * Interne voorraad overboeken werkt nu met een lijst: kies Van en Naar, zoek producten, vul aantallen in (met zichtbaar hoeveel er beschikbaar is in de Van-locatie) en boek alles in één keer over. Er wordt eerst alles gecontroleerd; is er ergens te weinig voorraad, dan wordt er niets overgeboekt. Met "Vul in vanuit het aanvuladvies" zet je de producten die vanuit Baarn moeten worden aangevuld in één keer op de lijst.
 
 = 1.19.0 =
