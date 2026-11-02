@@ -51,6 +51,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 == Changelog ==
 
+= Volgende versie (nog niet uitgebracht) =
+* Interne voorraad overboeken werkt nu met een lijst: kies Van en Naar, zoek producten, vul aantallen in (met zichtbaar hoeveel er beschikbaar is in de Van-locatie) en boek alles in één keer over. Er wordt eerst alles gecontroleerd; is er ergens te weinig voorraad, dan wordt er niets overgeboekt. Met "Vul in vanuit het aanvuladvies" zet je de producten die vanuit Baarn moeten worden aangevuld in één keer op de lijst.
+
 = 1.19.0 =
 * Kassa-orders die ooit de status "In behandeling" hebben gehad (zo komen via de kassa verzonden bestellingen binnen) worden herkend als verzending via Bonusan: ze boeken niet af van de locatievoorraad en tellen op de Bonusan-bestelling als webshopverkoop, ook nadat je ze hebt afgerond. De plugin leest dat uit de huidige status, een eigen markering (gezet zodra de order in behandeling komt of gaat) en de statusnotities van WooCommerce ("Orderstatus gewijzigd van In behandeling naar ..."). Instelbaar onder "Kassa-order die in behandeling stond" (standaard Ja).
 * Een winkelverkoop per bankoverschrijving die eerst in behandeling stond wordt daardoor ook als verzending gezien (zet de instelling op Nee als dat niet gewenst is).

@@ -65,6 +65,7 @@ final class Schreuder_Bonusan_POS {
         add_action( 'wp_ajax_sbp_stock_import_apply', array( $this, 'ajax_stock_import_apply' ) );
         add_action( 'wp_ajax_sbp_stock_adjust', array( $this, 'ajax_stock_adjust' ) );
         add_action( 'wp_ajax_sbp_stock_transfer', array( $this, 'ajax_stock_transfer' ) );
+        add_action( 'wp_ajax_sbp_stock_transfer_batch', array( $this, 'ajax_stock_transfer_batch' ) );
         add_action( 'wp_ajax_sbp_assign_order_location', array( $this, 'ajax_assign_order_location' ) );
         add_action( 'wp_ajax_sbp_stock_undo_webshop', array( $this, 'ajax_stock_undo_webshop' ) );
         // Voorraadboekingen zijn idempotent (zie reconcile_order); meerdere hooks per order zijn dus veilig.
@@ -2753,13 +2754,14 @@ final class Schreuder_Bonusan_POS {
 
             <?php if ( $products ) : ?>
             <div class="sbp-stock-grid">
-                <div class="sbp-stock-card">
+                <div class="sbp-stock-card" id="sbp-transfer-list">
                     <h2>Interne voorraad overboeken</h2>
-                    <p class="description">Bijvoorbeeld Baarn → Haarlem. De ene voorraad gaat omlaag en de andere tegelijk omhoog.</p>
-                    <p><select id="sbp-transfer-product"><?php foreach($products as $id=>$product){echo '<option value="'.esc_attr($id).'">'.esc_html($product->get_name()).'</option>';} ?></select></p>
-                    <p><select id="sbp-transfer-from"><option value="baarn">Baarn</option><option value="haarlem">Haarlem</option><option value="zwolle">Zwolle</option></select> → <select id="sbp-transfer-to"><option value="haarlem">Haarlem</option><option value="zwolle">Zwolle</option><option value="baarn">Baarn</option></select></p>
-                    <p>Aantal <input type="number" id="sbp-transfer-qty" min="1" step="1" value="1" class="small-text"> <button class="button" id="sbp-transfer-do">Overboeken</button></p>
-                    <div id="sbp-transfer-status"></div>
+                    <p class="description">Maak een lijst en boek alles in één keer over. De ene voorraad gaat omlaag en de andere tegelijk omhoog. Er wordt eerst gecontroleerd of er overal genoeg voorraad is; is dat niet zo, dan wordt er niets overgeboekt.</p>
+                    <p><label>Van <select id="sbp-tl-from"><option value="baarn">Baarn</option><option value="haarlem">Haarlem</option><option value="zwolle">Zwolle</option></select></label> → <label>naar <select id="sbp-tl-to"><option value="haarlem">Haarlem</option><option value="zwolle">Zwolle</option><option value="baarn">Baarn</option></select></label></p>
+                    <div class="sbp-stock-search-wrap"><input type="search" id="sbp-tl-search" class="regular-text" placeholder="Zoek product op naam of SKU…" autocomplete="off"><div id="sbp-tl-results" class="sbp-stock-search-results" style="display:none"></div></div>
+                    <p><button type="button" class="button" id="sbp-tl-fill" title="Zet de producten uit het aanvuladvies op de lijst die vanuit Baarn moeten worden aangevuld">Vul in vanuit het aanvuladvies</button></p>
+                    <table class="widefat striped" id="sbp-tl-table" style="display:none"><thead><tr><th>Product</th><th>Beschikbaar in <span id="sbp-tl-fromlabel">Baarn</span></th><th>Aantal</th><th></th></tr></thead><tbody></tbody></table>
+                    <p><button type="button" class="button button-primary" id="sbp-tl-save" disabled>Alles overboeken</button> <button type="button" class="button" id="sbp-tl-clear" style="display:none">Lijst legen</button> <span id="sbp-tl-msg" role="status"></span></p>
                 </div>
                 <div class="sbp-stock-card">
                     <h2>Handmatige correctie / levering</h2>
@@ -2901,7 +2903,7 @@ final class Schreuder_Bonusan_POS {
                     let tb=$('.sbp-stock-table tbody');
                     if(!tb.length){location.reload();return;}
                     let row=$(r.data.row_html); tb.prepend(row); sbpApplyStock();
-                    $('#sbp-transfer-product,#sbp-adjust-product').append($('<option>').val(prod.id).text(prod.name));
+                    $('#sbp-adjust-product').append($('<option>').val(prod.id).text(prod.name));
                     $('#sbp-quick-msg').text('✓ '+r.data.message);
                     endQuick(); jumpToRow(prod.id); $('#sbp-stock-search').trigger('focus');
                 }).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){btn.prop('disabled',false);});
@@ -3032,7 +3034,57 @@ final class Schreuder_Bonusan_POS {
             $(document).on('click','.sbp-receive-shipment',function(){let box=$(this).closest('.sbp-shipment'),changes=[];box.find('tbody tr').each(function(){let tr=$(this),mode=tr.find('.sbp-recv-mode').val();if(mode==='wait')return;changes.push({id:tr.data('line'),mode:mode,qty:tr.find('.sbp-recv-qty').val(),expected:String(tr.data('open'))});});if(!changes.length){alert('Er is niets om te verwerken.');return;}if(!confirm('Deze zending verwerken? De ontvangen aantallen worden bij de voorraad opgeteld.'))return;let b=$(this).prop('disabled',true);post('sbp_stock_receive',{changes:JSON.stringify(changes)}).done(function(r){if(r.success){location.reload();}else{alert(r.data.message);location.reload();}}).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){b.prop('disabled',false);});});
             $(document).on('click','.sbp-stock-remove',function(){if(!confirm('Dit product niet meer volgen in locatievoorraad? De voorraadhistorie blijft bewaard.'))return;let id=$(this).closest('tr').data('product-id');post('sbp_stock_remove_product',{product_id:id}).done(function(r){if(r.success)location.reload();});});
             $('.sbp-assign-location').on('click',function(){let b=$(this),row=b.closest('tr');post('sbp_assign_order_location',{order_id:row.data('order-id'),location:b.data('location')}).done(function(r){if(r.success){row.fadeOut(200,function(){location.reload();});}else alert(r.data.message||'Locatie kon niet worden opgeslagen.');});});
-            $('#sbp-transfer-do').on('click',function(){let data={product_id:$('#sbp-transfer-product').val(),from:$('#sbp-transfer-from').val(),to:$('#sbp-transfer-to').val(),qty:$('#sbp-transfer-qty').val()};post('sbp_stock_transfer',data).done(function(r){if(r.success){$('#sbp-transfer-status').text(r.data.message);setTimeout(function(){location.reload();},500);}else alert(r.data.message||'Overboeken mislukt.');});});
+            const TL_STOCK=<?php $tl_stock=array(); foreach($products as $tid=>$tp){ $tl_stock[(int)$tid]=array('name'=>$tp->get_name(),'sku'=>(string)$tp->get_sku(),'stock'=>array('baarn'=>$this->stock_number($tid,'stock','baarn'),'haarlem'=>$this->stock_number($tid,'stock','haarlem'),'zwolle'=>$this->stock_number($tid,'stock','zwolle'))); } echo wp_json_encode($tl_stock, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+            const TL_ADVICE=<?php $tl_adv=array(); foreach($advice as $ta){ if('transfer'!==$ta['mode']){continue;} $tl_adv[(int)$ta['product_id']]=array('haarlem'=>(float)$ta['to_haarlem'],'zwolle'=>(float)$ta['to_zwolle']); } echo wp_json_encode($tl_adv, JSON_HEX_TAG | JSON_HEX_AMP); ?>;
+            function tlFmt(n){return String(Math.round(Number(n)*1000)/1000).replace('.',',');}
+            function tlRefresh(){
+                let from=$('#sbp-tl-from').val(),n=$('#sbp-tl-table tbody tr').length;
+                $('#sbp-tl-fromlabel').text(from.charAt(0).toUpperCase()+from.slice(1));
+                $('#sbp-tl-table').toggle(n>0);$('#sbp-tl-save').prop('disabled',!n);$('#sbp-tl-clear').toggle(n>0);
+                $('#sbp-tl-table tbody tr').each(function(){
+                    let id=$(this).data('id'),av=TL_STOCK[id]?Number(TL_STOCK[id].stock[from]):0,q=parseFloat(String($(this).find('.sbp-tl-qty').val()).replace(',','.'));
+                    $(this).find('.sbp-tl-av').text(tlFmt(av));
+                    $(this).find('.sbp-tl-av').css({color:(q>av+0.0005)?'#b32d2e':'',fontWeight:(q>av+0.0005)?'700':''});
+                    $(this).toggleClass('sbp-tl-short',q>av+0.0005);
+                });
+            }
+            function tlAdd(id,qty){
+                id=Number(id); if(!TL_STOCK[id])return false;
+                let ex=$('#sbp-tl-table tbody tr[data-id="'+id+'"]');
+                if(ex.length){if(qty!=null)ex.find('.sbp-tl-qty').val(qty);return ex;}
+                let tr=$('<tr>').attr('data-id',id).append($('<td>').append($('<strong>').text(TL_STOCK[id].name)).append($('<br>')).append($('<small>').text(TL_STOCK[id].sku?'SKU '+TL_STOCK[id].sku:'')))
+                    .append($('<td class="sbp-tl-av">'))
+                    .append($('<td>').append($('<input type="number" min="0" step="any" class="small-text sbp-tl-qty">').val(qty==null?'':qty)))
+                    .append($('<td>').append($('<button type="button" class="button button-small sbp-tl-del">Verwijderen</button>')));
+                $('#sbp-tl-table tbody').append(tr); return tr;
+            }
+            let tlTimer=null;
+            $('#sbp-tl-search').on('input',function(){let term=$(this).val().trim(),box=$('#sbp-tl-results');clearTimeout(tlTimer);if(term.length<2){box.hide().empty();return;}tlTimer=setTimeout(function(){post('sbp_stock_product_search',{term:term}).done(function(r){if(!r.success||!r.data.results.length){box.html('<div style="padding:9px">Geen product gevonden.</div>').show();return;}let h='';r.data.results.forEach(function(x){h+='<button type="button" class="sbp-stock-search-item sbp-tl-item" data-id="'+esc(x.id)+'" data-tracked="'+(x.tracked?'1':'')+'"><strong>'+esc(x.name)+'</strong><br><small>SKU '+esc(x.sku||'—')+(x.tracked?'':' · staat nog niet in Locatievoorraad')+'</small></button>';});box.html(h).show();});},250);});
+            $(document).on('click','.sbp-tl-item',function(){
+                let b=$(this),id=b.data('id');$('#sbp-tl-results').hide().empty();$('#sbp-tl-search').val('');
+                if(!b.data('tracked')||!TL_STOCK[id]){$('#sbp-tl-msg').css('color','#b32d2e').text('Dit product staat niet in Locatievoorraad: voeg het eerst toe.');return;}
+                $('#sbp-tl-msg').text('');let tr=tlAdd(id,null);tlRefresh();tr.find('.sbp-tl-qty').trigger('focus');
+            });
+            $('#sbp-tl-search').on('keydown',function(e){if(e.key==='Enter'){e.preventDefault();$('#sbp-tl-results .sbp-tl-item').first().trigger('click');}});
+            $(document).on('click','.sbp-tl-del',function(){$(this).closest('tr').remove();tlRefresh();});
+            $('#sbp-tl-clear').on('click',function(){$('#sbp-tl-table tbody').empty();$('#sbp-tl-msg').text('');tlRefresh();});
+            $('#sbp-tl-from,#sbp-tl-to').on('change',function(){tlRefresh();});
+            $(document).on('input change','.sbp-tl-qty',tlRefresh);
+            $('#sbp-tl-fill').on('click',function(){
+                let from=$('#sbp-tl-from').val(),to=$('#sbp-tl-to').val(),added=0;
+                if(from!=='baarn'||(to!=='haarlem'&&to!=='zwolle')){$('#sbp-tl-msg').css('color','#b32d2e').text('Het advies geldt voor aanvullen vanuit Baarn naar Haarlem of Zwolle: kies Van Baarn en naar Haarlem of Zwolle.');return;}
+                Object.keys(TL_ADVICE).forEach(function(id){let q=Number(TL_ADVICE[id][to]||0);if(q>0&&TL_STOCK[id]){tlAdd(id,q);added++;}});
+                tlRefresh();$('#sbp-tl-msg').css('color',added?'#00700a':'#555').text(added?added+' product(en) uit het aanvuladvies op de lijst gezet. Controleer de aantallen.':'Het aanvuladvies heeft nu niets om over te boeken.');
+            });
+            $('#sbp-tl-save').on('click',function(){
+                let lines=[],bad=false;
+                $('#sbp-tl-table tbody tr').each(function(){let q=$(this).find('.sbp-tl-qty').val();if(q===''||!(parseFloat(String(q).replace(',','.'))>0)){bad=true;}lines.push({id:$(this).data('id'),qty:q});});
+                if(bad){$('#sbp-tl-msg').css('color','#b32d2e').text('Vul bij elk product een aantal groter dan 0 in (of verwijder de regel).');return;}
+                let b=$(this).prop('disabled',true);
+                post('sbp_stock_transfer_batch',{from:$('#sbp-tl-from').val(),to:$('#sbp-tl-to').val(),lines:JSON.stringify(lines)}).done(function(r){
+                    if(r.success){$('#sbp-tl-msg').css('color','#00700a').text('✓ '+r.data.message);setTimeout(function(){location.reload();},1200);}else{b.prop('disabled',false);}
+                }).fail(function(){b.prop('disabled',false);});
+            });
             $('#sbp-adjust-do').on('click',function(){let data={product_id:$('#sbp-adjust-product').val(),location:$('#sbp-adjust-location').val(),delta:$('#sbp-adjust-delta').val(),note:$('#sbp-adjust-note').val()};post('sbp_stock_adjust',data).done(function(r){if(r.success){$('#sbp-adjust-status').text(r.data.message);setTimeout(function(){location.reload();},500);}else alert(r.data.message||'Correctie mislukt.');});});
         });
         </script>
@@ -3428,6 +3480,51 @@ final class Schreuder_Bonusan_POS {
         }
         $this->forget_stock_cache();
         wp_send_json_success( array( 'message' => $qty . ' stuks overgeboekt van ' . ucfirst( $from ) . ' naar ' . ucfirst( $to ) . '.' ) );
+    }
+
+    /**
+     * Boekt een lijst producten in één keer over tussen twee locaties. Eerst wordt alles gecontroleerd (gevolgd product,
+     * aantal, genoeg voorraad); is er iets mis, dan wordt er niets overgeboekt. Elke regel is daarna een eigen
+     * transactie met eigen logregels. Mislukt er tijdens het boeken toch iets (bijv. door een verkoop op hetzelfde moment),
+     * dan staat in de melding precies wat wel en niet is gelukt.
+     */
+    public function ajax_stock_transfer_batch() {
+        $this->guard();
+        $locs = $this->stock_locations();
+        $from = sanitize_key( (string)( $_POST['from'] ?? '' ) );
+        $to = sanitize_key( (string)( $_POST['to'] ?? '' ) );
+        if ( ! isset( $locs[$from] ) || ! isset( $locs[$to] ) || $from === $to ) { wp_send_json_error( array( 'message' => 'Kies twee verschillende locaties.' ), 400 ); }
+        $in = json_decode( (string) wp_unslash( $_POST['lines'] ?? '[]' ), true );
+        if ( ! is_array( $in ) || ! $in ) { wp_send_json_error( array( 'message' => 'De lijst is leeg.' ), 400 ); }
+        $lines = array(); $seen = array(); $errors = array();
+        foreach ( $in as $l ) {
+            $pid = absint( $l['id'] ?? 0 );
+            $raw = str_replace( ',', '.', sanitize_text_field( (string)( $l['qty'] ?? '' ) ) );
+            $product = $pid ? wc_get_product( $pid ) : false;
+            if ( ! $product || ! $this->is_stock_tracked_product_id( $pid ) ) { $errors[] = 'Een product staat niet (meer) in Locatievoorraad.'; continue; }
+            $name = $product->get_name();
+            if ( ! is_numeric( $raw ) || (float)$raw <= 0 || (float)$raw > 100000 ) { $errors[] = $name . ': vul een aantal groter dan 0 in.'; continue; }
+            if ( isset( $seen[$pid] ) ) { $errors[] = $name . ' staat er dubbel in.'; continue; }
+            $seen[$pid] = true;
+            $have = SBP_Ledger::quantity( $pid, $from );
+            if ( $have + 0.0005 < (float)$raw ) { $errors[] = $name . ': er is maar ' . rtrim( rtrim( number_format( $have, 3, ',', '' ), '0' ), ',' ) . ' in ' . ucfirst( $from ) . ', je wilt ' . rtrim( rtrim( number_format( (float)$raw, 3, ',', '' ), '0' ), ',' ) . ' overboeken.'; continue; }
+            $lines[] = array( 'id' => $pid, 'qty' => (float)$raw, 'name' => $name );
+        }
+        if ( $errors ) { wp_send_json_error( array( 'message' => "Er is niets overgeboekt:\n- " . implode( "\n- ", $errors ) ), 400 ); }
+        $done = array(); $failed = array();
+        foreach ( $lines as $l ) {
+            try {
+                SBP_Ledger::transfer( $l['id'], $from, $to, $l['qty'], 'Interne transfer ' . ucfirst( $from ) . ' → ' . ucfirst( $to ) . ' (lijst)', get_current_user_id(), $this->stock_info( $l['id'] ) );
+                $done[] = $l['name'];
+            } catch ( SBP_Ledger_Exception $e ) {
+                $failed[] = $l['name'] . ': ' . $e->getMessage();
+            }
+        }
+        $this->forget_stock_cache();
+        if ( $failed ) {
+            wp_send_json_error( array( 'message' => 'Niet alles is overgeboekt. Gelukt: ' . ( $done ? implode( ', ', $done ) : 'niets' ) . ".\nMislukt:\n- " . implode( "\n- ", $failed ) ), 409 );
+        }
+        wp_send_json_success( array( 'message' => count( $done ) . ' product(en) overgeboekt van ' . ucfirst( $from ) . ' naar ' . ucfirst( $to ) . '.', 'count' => count( $done ) ) );
     }
 
     public function ajax_assign_order_location() {
