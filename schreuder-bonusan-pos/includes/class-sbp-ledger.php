@@ -244,6 +244,13 @@ final class SBP_Ledger {
         return $out;
     }
 
+    /** Regels van handmatig geregistreerde bestellingen (oudste eerst), om de fabrikant van een product te leren. */
+    public static function manual_order_lines() {
+        global $wpdb;
+        $t = self::inbound_table();
+        return (array) $wpdb->get_results( "SELECT product_id, subject FROM $t WHERE note = 'Handmatig geregistreerd' ORDER BY created_gmt ASC, id ASC", ARRAY_A );
+    }
+
     /** Order-ID's met een positief netto geboekt aantal. */
     public static function booked_order_ids() {
         global $wpdb;

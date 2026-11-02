@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.21.2
+Stable tag: 1.22.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,11 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.22.0 =
+* Fabrikanten en levertijden. Nieuwe kaart "Fabrikanten en levertijden" op Locatievoorraad: per fabrikant (en Bonusan) stel je de levertijd in dagen in. De plugin onthoudt welke producten bij welke fabrikant horen: zodra je een bestelling registreert onder "Besteld bij een andere leverancier" wordt de fabrikant aan die producten gekoppeld; eerder geregistreerde bestellingen worden eenmalig overgenomen. Per product kun je de fabrikant ook kiezen in de voorraadlijst. Producten op de Bonusan-turflijst gelden automatisch als Bonusan.
+* Levertijd in de meldingen: bij een fabrikant met een levertijd waarschuwt de plugin eerder dan het minimum: zodra de voorraad naar verwachting binnen de levertijd (of binnen de ingestelde waarschuwingstermijn, als die langer is) op het minimum komt, krijg je een gele melding "bestel nu" of "bestel uiterlijk over ca. N dagen", met een bestelaantal waarmee de voorraad bij levering weer op gewenst komt (rekening houdend met het verkooptempo tijdens de levering).
+* De voorraadsignaal-mail is ingedeeld per fabrikant (met levertijd), daarna "andere fabrikant" en Bonusan; bij gele regels staan het uiterste besteldatum en het bestelaantal.
 
 = 1.21.2 =
 * Onderweg – bestellingen: elke zending staat ingeklapt en toont in één regel de leverancier/bestelling, datum, bestemming en het aantal producten en stuks onderweg. Klik op de regel om de producten te zien en de levering te verwerken (Akkoord). Met "Alles uitklappen" en "Alles inklappen" doe je ze in één keer.

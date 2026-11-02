@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.21.2
+ * Version: 1.22.0
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.21.2';
+    const VERSION = '1.22.0';
 
     private static $instance = null;
 
@@ -81,6 +81,10 @@ final class Schreuder_Bonusan_POS {
         add_action( 'sbp_reconcile_order', array( $this, 'reconcile_order' ) );
         add_action( 'init', array( $this, 'maybe_upgrade' ) );
         add_action( 'init', array( $this, 'maybe_migrate_loc_start' ), 20 );
+        add_action( 'init', array( $this, 'maybe_migrate_suppliers' ), 25 );
+        add_action( 'wp_ajax_sbp_supplier_save', array( $this, 'ajax_supplier_save' ) );
+        add_action( 'wp_ajax_sbp_supplier_add', array( $this, 'ajax_supplier_add' ) );
+        add_action( 'wp_ajax_sbp_stock_supplier', array( $this, 'ajax_stock_supplier' ) );
         add_action( 'admin_post_sbp_stock_log_csv', array( $this, 'download_stock_log_csv' ) );
         add_action( 'admin_notices', array( $this, 'dependency_notice' ) );
         add_action( 'admin_notices', array( $this, 'pending_stock_location_notice' ) );
@@ -1940,6 +1944,9 @@ final class Schreuder_Bonusan_POS {
         } catch ( Exception $e ) {
             wp_send_json_error( array( 'message' => 'Opslaan mislukt: ' . $e->getMessage() ), 500 );
         }
+        // Onthoud de fabrikant en koppel de producten eraan, zodat levertijd en meldingen er voortaan rekening mee houden.
+        $skey = $this->supplier_add( $supplier );
+        if ( '' !== $skey ) { foreach ( $lines as $l ) { update_post_meta( (int)$l['product_id'], '_sbp_supplier', $skey ); } }
         $this->forget_stock_cache();
         wp_send_json_success( array( 'message' => count( $lines ) . ' product(en) staan nu als onderweg naar ' . ucfirst( $loc ) . '. Verwerk de levering straks onder Onderweg.' ) );
     }
@@ -1993,6 +2000,93 @@ final class Schreuder_Bonusan_POS {
     private function reset_tracking( $product_id ) {
         delete_post_meta( (int)$product_id, '_sbp_loc_tracked_since' );
         foreach ( $this->stock_locations() as $loc => $label ) { delete_post_meta( (int)$product_id, '_sbp_loc_started_' . $loc ); }
+    }
+
+    /* ---------- fabrikanten en levertijden ---------- */
+
+    /** key => array( 'name' => weergavenaam, 'lead' => levertijd in dagen ). 'bonusan' bestaat altijd. */
+    private function suppliers() {
+        $o = get_option( 'sbp_suppliers', array() );
+        $o = is_array( $o ) ? $o : array();
+        if ( empty( $o['bonusan'] ) ) { $o['bonusan'] = array( 'name' => 'Bonusan', 'lead' => 0 ); }
+        $o['bonusan']['name'] = 'Bonusan';
+        return $o;
+    }
+
+    private function supplier_key( $name ) {
+        $k = strtolower( trim( preg_replace( '/\s+/u', ' ', wp_strip_all_tags( (string)$name ) ) ) );
+        return function_exists( 'mb_substr' ) ? mb_substr( $k, 0, 80 ) : substr( $k, 0, 80 );
+    }
+
+    /** Voegt een fabrikant toe als die nog niet bestaat (levertijd alleen bij nieuw of als $lead is meegegeven). Geeft de sleutel. */
+    private function supplier_add( $name, $lead = null ) {
+        $name = trim( preg_replace( '/\s+/u', ' ', wp_strip_all_tags( (string)$name ) ) );
+        $key = $this->supplier_key( $name );
+        if ( '' === $key ) { return ''; }
+        $all = $this->suppliers();
+        if ( ! isset( $all[$key] ) ) { $all[$key] = array( 'name' => $name, 'lead' => 0 ); }
+        if ( null !== $lead ) { $all[$key]['lead'] = max( 0, min( 365, (int)$lead ) ); }
+        update_option( 'sbp_suppliers', $all );
+        return $key;
+    }
+
+    private function supplier_lead( $key ) {
+        $all = $this->suppliers();
+        return isset( $all[$key] ) ? max( 0, (int)$all[$key]['lead'] ) : 0;
+    }
+
+    /** Fabrikant van een gevolgd product: de vastgelegde keuze (of geleerd uit een geregistreerde bestelling), anders Bonusan als het op de turflijst staat. */
+    private function supplier_for_product( $product_id, $product = null ) {
+        $k = (string) get_post_meta( (int)$product_id, '_sbp_supplier', true );
+        if ( '' !== $k && isset( $this->suppliers()[$k] ) ) { return $k; }
+        if ( null === $product ) { $product = wc_get_product( (int)$product_id ); }
+        return ( $product && $this->is_any_turflist_product( $product ) ) ? 'bonusan' : '';
+    }
+
+    /** Eenmalig: koppelt producten aan de fabrikant van hun laatste handmatig geregistreerde bestelling. */
+    public function maybe_migrate_suppliers() {
+        if ( ! class_exists( 'WooCommerce' ) || get_option( 'sbp_suppliers_v1' ) ) { return; }
+        foreach ( SBP_Ledger::manual_order_lines() as $row ) {
+            if ( ! preg_match( '/^Bestelling bij (.+)$/u', (string)$row['subject'], $m ) ) { continue; }
+            $key = $this->supplier_add( $m[1] );
+            if ( '' === $key ) { continue; }
+            $pid = (int)$row['product_id'];
+            if ( $pid && '' === (string) get_post_meta( $pid, '_sbp_supplier', true ) ) { update_post_meta( $pid, '_sbp_supplier', $key ); }
+        }
+        update_option( 'sbp_suppliers_v1', time() );
+    }
+
+    public function ajax_supplier_save() {
+        $this->guard();
+        $key = sanitize_text_field( wp_unslash( (string)( $_POST['key'] ?? '' ) ) );
+        $all = $this->suppliers();
+        if ( ! isset( $all[$key] ) ) { wp_send_json_error( array( 'message' => 'Onbekende fabrikant.' ), 400 ); }
+        $raw = str_replace( ',', '.', sanitize_text_field( (string)( $_POST['lead'] ?? '' ) ) );
+        if ( ! is_numeric( $raw ) || (float)$raw < 0 || (float)$raw > 365 ) { wp_send_json_error( array( 'message' => 'Vul een levertijd in dagen in (0 tot 365).' ), 400 ); }
+        $this->supplier_add( $all[$key]['name'], (int) round( (float)$raw ) );
+        delete_transient( 'sbp_forecast_items' );
+        wp_send_json_success( array( 'message' => 'Levertijd van ' . $all[$key]['name'] . ' opgeslagen: ' . (int) round( (float)$raw ) . ' dagen.' ) );
+    }
+
+    public function ajax_supplier_add() {
+        $this->guard();
+        $name = trim( sanitize_text_field( wp_unslash( (string)( $_POST['name'] ?? '' ) ) ) );
+        if ( '' === $this->supplier_key( $name ) ) { wp_send_json_error( array( 'message' => 'Vul de naam van de fabrikant in.' ), 400 ); }
+        $raw = str_replace( ',', '.', sanitize_text_field( (string)( $_POST['lead'] ?? '0' ) ) );
+        $lead = ( is_numeric( $raw ) && (float)$raw >= 0 && (float)$raw <= 365 ) ? (int) round( (float)$raw ) : 0;
+        $this->supplier_add( $name, $lead );
+        wp_send_json_success( array( 'message' => 'Fabrikant toegevoegd.' ) );
+    }
+
+    public function ajax_stock_supplier() {
+        $this->guard();
+        $id = absint( $_POST['product_id'] ?? 0 );
+        $key = sanitize_text_field( wp_unslash( (string)( $_POST['supplier'] ?? '' ) ) );
+        if ( ! $id || ! $this->is_stock_tracked_product_id( $id ) ) { wp_send_json_error( array( 'message' => 'Product niet gevonden.' ), 400 ); }
+        if ( '' !== $key && ! isset( $this->suppliers()[$key] ) ) { wp_send_json_error( array( 'message' => 'Onbekende fabrikant.' ), 400 ); }
+        if ( '' === $key ) { delete_post_meta( $id, '_sbp_supplier' ); } else { update_post_meta( $id, '_sbp_supplier', $key ); }
+        delete_transient( 'sbp_forecast_items' );
+        wp_send_json_success( array( 'message' => 'Opgeslagen.' ) );
     }
 
     /** Eenmalig: bepaalt voor producten die al werden gevolgd welke locaties al een voorraad hebben gehad. */
@@ -2246,13 +2340,15 @@ final class Schreuder_Bonusan_POS {
                 $d = $r['days_to_min'][$loc] ?? null;
                 if ( empty( $r['signal'][$loc] ) ) { continue; }
                 $now_low = ! empty( $r['below_min'][$loc] );
-                if ( ! $now_low && ( null === $d || $d > $lead ) ) { continue; }
+                $horizon = max( $lead, (int)( $r['lead_days'] ?? 0 ) ); // levertijd van de fabrikant verlengt de waarschuwingstermijn
+                if ( ! $now_low && ( null === $d || $d > $horizon ) ) { continue; }
                 $out[] = array(
                     'product_id' => (int)$r['product_id'], 'name' => (string)$r['name'], 'sku' => (string)$r['sku'],
                     'loc' => $loc, 'label' => $label, 'stock' => (float)$r[$loc], 'onway' => (float)( $r['in_transit'][$loc] ?? 0 ),
                     'min' => (float)$r[$loc.'_min'], 'target' => (float)$r[$loc.'_target'], 'daily' => (float)( $r['daily'][$loc] ?? 0 ),
                     'days' => $now_low ? 0.0 : (float)$d,
-                    'route' => (string)$r['route'], 'mode' => (string)$r['mode'], 'order_qty' => (float)( $r['order_qty'][$loc] ?? 0 ),
+                    'route' => (string)$r['route'], 'mode' => (string)$r['mode'], 'order_qty' => $now_low ? (float)( $r['order_qty'][$loc] ?? 0 ) : (float)( $r['arrival_qty'][$loc] ?? 0 ),
+                    'supplier' => (string)( $r['supplier'] ?? '' ), 'supplier_name' => (string)( $r['supplier_name'] ?? '' ), 'lead_days' => (int)( $r['lead_days'] ?? 0 ),
                 );
             }
         }
@@ -2263,14 +2359,22 @@ final class Schreuder_Bonusan_POS {
 
     /** Verdeelt de signaalregels in secties: andere fabrikant / Bonusan, en per sectie "nu bestellen" / "binnenkort". Binnen een tabel op productnaam. */
     private function forecast_sections( $send ) {
-        $sections = array(
-            'supplier' => array( 'title' => 'Bij een andere fabrikant bestellen (niet via Bonusan)', 'now' => array(), 'soon' => array() ),
-            'bonusan'  => array( 'title' => 'Via Bonusan (turflijst)', 'now' => array(), 'soon' => array() ),
-        );
+        $sections = array();
+        $mk = function ( $key, $title, $lead ) { return array( 'title' => $title, 'lead' => $lead, 'transfer' => false, 'now' => array(), 'soon' => array() ); };
         foreach ( $send as $it ) {
-            $sec = ( 'transfer' === $it['mode'] || 'bonusan' !== $it['route'] ) ? 'supplier' : 'bonusan';
-            $sections[$sec][ $it['days'] <= 0 ? 'now' : 'soon' ][] = $it;
+            if ( 'transfer' === $it['mode'] || 'bonusan' !== $it['route'] || ( '' !== $it['supplier'] && 'bonusan' !== $it['supplier'] ) ) {
+                if ( '' !== $it['supplier'] && 'bonusan' !== $it['supplier'] ) { $key = 's:' . $it['supplier']; $title = $it['supplier_name'] . ( $it['lead_days'] > 0 ? ' – levertijd ' . $it['lead_days'] . ' dagen' : '' ); }
+                else { $key = 'other'; $title = 'Bij een andere fabrikant bestellen (niet via Bonusan)'; }
+            } else { $key = 'bonusan'; $title = 'Via Bonusan (turflijst)'; }
+            if ( ! isset( $sections[$key] ) ) { $sections[$key] = $mk( $key, $title, (int)$it['lead_days'] ); }
+            if ( 'transfer' === $it['mode'] ) { $sections[$key]['transfer'] = true; }
+            $sections[$key][ $it['days'] <= 0 ? 'now' : 'soon' ][] = $it;
         }
+        // Volgorde: fabrikanten (alfabet), daarna "andere fabrikant", dan Bonusan.
+        uksort( $sections, function ( $a, $b ) use ( $sections ) {
+            $rank = function ( $k ) { return 0 === strpos( $k, 's:' ) ? 0 : ( 'other' === $k ? 1 : 2 ); };
+            return ( $rank( $a ) <=> $rank( $b ) ) ?: strnatcasecmp( $sections[$a]['title'], $sections[$b]['title'] );
+        } );
         foreach ( $sections as $k => $sec ) {
             usort( $sections[$k]['now'], function ( $a, $b ) { return strnatcasecmp( $a['name'], $b['name'] ); } );
             usort( $sections[$k]['soon'], function ( $a, $b ) { return $a['days'] <=> $b['days']; } );
@@ -2294,10 +2398,11 @@ final class Schreuder_Bonusan_POS {
                 }
             }
             if ( $sec['soon'] ) {
-                $out .= "\nBinnen {$lead} dagen op het minimum (" . count( $sec['soon'] ) . "):\n";
+                $out .= "\n" . ( $sec['lead'] > 0 ? 'Bestel op tijd (levertijd ' . (int)$sec['lead'] . ' dagen)' : "Binnen {$lead} dagen op het minimum" ) . ' (' . count( $sec['soon'] ) . "):\n";
                 foreach ( $sec['soon'] as $it ) {
                     $out .= '- ' . $it['name'] . ( '' !== $it['sku'] ? ' (' . $it['sku'] . ')' : '' ) . ' – ' . $it['label'] . ': voorraad ' . $this->forecast_num( $it['stock'] )
-                        . ', min ' . $this->forecast_num( $it['min'] ) . ', gewenst ' . $this->forecast_num( $it['target'] ) . ' → over ca. ' . ceil( $it['days'] ) . " dagen\n";
+                        . ', min ' . $this->forecast_num( $it['min'] ) . ', gewenst ' . $this->forecast_num( $it['target'] ) . ' → over ca. ' . ceil( $it['days'] ) . ' dagen'
+                        . ( $it['lead_days'] > 0 ? ( $it['days'] <= $it['lead_days'] ? ', levertijd ' . $it['lead_days'] . ' dagen: NU BESTELLEN' : ', levertijd ' . $it['lead_days'] . ' dagen: bestel uiterlijk over ca. ' . ceil( $it['days'] - $it['lead_days'] ) . ' dagen' ) . ( $it['order_qty'] > 0 ? ' (ca. ' . $this->forecast_num( $it['order_qty'] ) . ' stuks)' : '' ) : '' ) . "\n";
                 }
             }
         }
@@ -2329,17 +2434,18 @@ final class Schreuder_Bonusan_POS {
                         . '<td ' . $tdr . '><strong style="font-size:15px">' . ( $it['order_qty'] > 0 ? esc_html( $this->forecast_num( $it['order_qty'] ) ) : '—' ) . '</strong></td></tr>';
                 }
                 $h .= '</table>';
-                if ( 'supplier' === $skey ) { $h .= '<p style="margin:4px 0 0;font-size:12px;color:#787c82">Het aantal om te bestellen is inclusief wat Haarlem en Zwolle nodig hebben.</p>'; }
+                if ( ! empty( $sec['transfer'] ) ) { $h .= '<p style="margin:4px 0 0;font-size:12px;color:#787c82">Het aantal om te bestellen is inclusief wat Haarlem en Zwolle nodig hebben.</p>'; }
             }
             if ( $sec['soon'] ) {
-                $h .= '<p style="margin:14px 0 4px;font-weight:bold;color:#996800">Binnen ' . (int)$lead . ' dagen op het minimum (' . count( $sec['soon'] ) . ')</p>';
+                $h .= '<p style="margin:14px 0 4px;font-weight:bold;color:#996800">' . ( $sec['lead'] > 0 ? 'Bestel op tijd: levertijd ' . (int)$sec['lead'] . ' dagen' : 'Binnen ' . (int)$lead . ' dagen op het minimum' ) . ' (' . count( $sec['soon'] ) . ')</p>';
                 $h .= '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;table-layout:fixed"><colgroup><col style="width:38%"><col style="width:13%"><col style="width:15%"><col style="width:10%"><col style="width:12%"><col style="width:12%"></colgroup><tr><th ' . $th . '>Product</th><th ' . $th . '>Locatie</th><th ' . $thr . '>Voorraad</th><th ' . $thr . '>Min</th><th ' . $thr . '>Gewenst</th><th ' . $thr . '>Verwacht</th></tr>';
                 foreach ( $sec['soon'] as $it ) {
                     $h .= '<tr><td ' . $td . '><strong>' . esc_html( $it['name'] ) . '</strong>' . ( '' !== $it['sku'] ? '<br><span style="color:#787c82;font-size:12px">' . esc_html( $it['sku'] ) . '</span>' : '' ) . '</td>'
                         . '<td ' . $td . '>' . esc_html( $it['label'] ) . '</td>'
                         . '<td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['stock'] ) ) . ( $it['onway'] > 0 ? '<br><span style="color:#787c82;font-size:12px">+' . esc_html( $this->forecast_num( $it['onway'] ) ) . ' onderweg</span>' : '' ) . '</td>'
                         . '<td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['min'] ) ) . '</td><td ' . $tdr . '>' . esc_html( $this->forecast_num( $it['target'] ) ) . '</td>'
-                        . '<td ' . $tdr . '>over ca. ' . (int) ceil( $it['days'] ) . ' dagen<br><span style="color:#787c82;font-size:12px">rond ' . esc_html( wp_date( 'd-m-Y', time() + (int) round( $it['days'] * DAY_IN_SECONDS ) ) ) . '</span></td></tr>';
+                        . '<td ' . $tdr . '>over ca. ' . (int) ceil( $it['days'] ) . ' dagen<br><span style="color:#787c82;font-size:12px">rond ' . esc_html( wp_date( 'd-m-Y', time() + (int) round( $it['days'] * DAY_IN_SECONDS ) ) ) . '</span>'
+                        . ( $it['lead_days'] > 0 ? '<br><strong style="color:#996800;font-size:12px">' . ( $it['days'] <= $it['lead_days'] ? 'Nu bestellen' : 'Bestel uiterlijk ' . esc_html( wp_date( 'd-m-Y', time() + (int) round( ( $it['days'] - $it['lead_days'] ) * DAY_IN_SECONDS ) ) ) ) . '</strong>' . ( $it['order_qty'] > 0 ? '<br><span style="font-size:12px">ca. ' . esc_html( $this->forecast_num( $it['order_qty'] ) ) . ' stuks</span>' : '' ) : '' ) . '</td></tr>';
                 }
                 $h .= '</table>';
             }
@@ -2532,8 +2638,21 @@ final class Schreuder_Bonusan_POS {
             $daily['baarn'] = $pool; // het tempo waarmee de Baarn-voorraad leegloopt, inclusief wat naar Haarlem en Zwolle gaat
             $order_qty = array( 'baarn' => $external_need, 'haarlem' => 0, 'zwolle' => 0 );
         }
+        $sup = $this->supplier_for_product( $product_id, $product );
+        $sup_lead = $sup ? $this->supplier_lead( $sup ) : 0;
+        $arrival = array( 'baarn' => 0, 'haarlem' => 0, 'zwolle' => 0 );
+        if ( $sup_lead > 0 ) {
+            foreach ( $this->stock_locations() as $loc => $label ) {
+                if ( null === ( $days_to_min[$loc] ?? null ) ) { continue; }
+                $base = ( 'transfer' === $mode && 'baarn' === $loc ) ? $baarn_after_transfers : $eff[$loc];
+                // Zo veel erbij bestellen dat de voorraad bij levering weer op "gewenst" komt (de voorraad zakt tot dan nog met het dagtempo).
+                $arrival[$loc] = (float) ceil( max( 0, $s[$loc.'_target'] - max( 0, $base - $daily[$loc] * $sup_lead ) ) );
+            }
+        }
+        $all_sup = $this->suppliers();
         $turf = $this->is_any_turflist_product( $product );
         $out_row = array_merge( $s, array(
+            'supplier' => $sup, 'supplier_name' => $sup ? (string)$all_sup[$sup]['name'] : '', 'lead_days' => $sup_lead, 'arrival_qty' => $arrival,
             'signal' => $signal, 'started' => $started, 'order_qty' => $order_qty,
             'name' => $product->get_name(), 'sku' => $product->get_sku(),
             'to_haarlem' => $h_need, 'to_zwolle' => $z_need,
@@ -2561,6 +2680,8 @@ final class Schreuder_Bonusan_POS {
      */
     private function stock_alert_level( $a ) {
         $lead = max( 1, min( 60, (int)( $this->settings()['forecast_days'] ?? 14 ) ) );
+        $sup_lead = (int)( $a['lead_days'] ?? 0 );
+        $lead = max( $lead, $sup_lead ); // bij een lange levertijd wil je eerder gewaarschuwd worden
         $rank = 0; $reasons = array();
         $fmt = function ( $n ) { return rtrim( rtrim( number_format( (float)$n, 2, ',', '' ), '0' ), ',' ); };
         foreach ( $this->stock_locations() as $loc => $label ) {
@@ -2576,7 +2697,13 @@ final class Schreuder_Bonusan_POS {
                 $reasons[] = array( 'level' => 'orange', 'text' => $label . ': voorraad ' . $fmt( $st ) . ', minimum ' . $fmt( $min ) . ( $q > 0 ? ': bestel ' . $fmt( $q ) : '' ) );
             } elseif ( ! empty( $a['signal'][$loc] ) && null !== ( $a['days_to_min'][$loc] ?? null ) && $a['days_to_min'][$loc] <= $lead ) {
                 $rank = max( $rank, 1 );
-                $reasons[] = array( 'level' => 'yellow', 'text' => $label . ': over ca. ' . (int) ceil( $a['days_to_min'][$loc] ) . ' dagen op het minimum' );
+                $dd = (int) ceil( $a['days_to_min'][$loc] );
+                $txt = $label . ': over ca. ' . $dd . ' dagen op het minimum';
+                if ( $sup_lead > 0 ) {
+                    $aq = (float)( $a['arrival_qty'][$loc] ?? 0 );
+                    $txt .= '; levertijd ' . ( '' !== (string)( $a['supplier_name'] ?? '' ) ? $a['supplier_name'] . ' ' : '' ) . $sup_lead . ' dagen' . ( $dd <= $sup_lead ? ': nu bestellen' : ': bestel uiterlijk over ca. ' . ( $dd - $sup_lead ) . ' dagen' ) . ( $aq > 0 ? ' (ca. ' . $fmt( $aq ) . ' stuks)' : '' );
+                }
+                $reasons[] = array( 'level' => 'yellow', 'text' => $txt );
             }
         }
         $names = array( 0 => 'none', 1 => 'yellow', 2 => 'orange', 3 => 'red' );
@@ -2739,7 +2866,7 @@ final class Schreuder_Bonusan_POS {
         $st = $this->get_stock_state( $id );
         ob_start();
         ?>
-                    <tr data-product-id="<?php echo esc_attr($id); ?>" data-name="<?php echo esc_attr($product->get_name()); ?>" data-sku="<?php echo esc_attr($product->get_sku()); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><?php if ( ! $this->tracked_since( $id ) ) : ?><br><span class="sbp-wait">⏳ Wacht op beginvoorraad: vul per locatie de getelde voorraad in. Is een locatie echt 0, druk dan bij die locatie op "Start".</span><?php endif; ?><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
+                    <tr data-product-id="<?php echo esc_attr($id); ?>" data-name="<?php echo esc_attr($product->get_name()); ?>" data-sku="<?php echo esc_attr($product->get_sku()); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><br><small>Fabrikant: <select class="sbp-sup-sel" data-id="<?php echo esc_attr($id); ?>" title="Bij welke fabrikant bestel je dit? Bepaalt de levertijd voor het voorraadsignaal."><?php $cur_sup = (string) get_post_meta( $id, '_sbp_supplier', true ); echo '<option value="">Automatisch'.( $this->is_any_turflist_product($product) ? ' (Bonusan)' : ' (niet ingesteld)' ).'</option>'; foreach ( $this->suppliers() as $sk => $sv ) { echo '<option value="'.esc_attr($sk).'"'.selected($cur_sup,$sk,false).'>'.esc_html($sv['name']).( (int)$sv['lead'] > 0 ? ' ('.(int)$sv['lead'].' d)' : '' ).'</option>'; } ?></select></small><?php if ( ! $this->tracked_since( $id ) ) : ?><br><span class="sbp-wait">⏳ Wacht op beginvoorraad: vul per locatie de getelde voorraad in. Is een locatie echt 0, druk dan bij die locatie op "Start".</span><?php endif; ?><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
                     <?php foreach(array('baarn','haarlem','zwolle') as $loc): ?>
                         <td><input class="small-text sbp-stock-number<?php echo $st[$loc] < 0 ? ' sbp-neg' : ''; ?>" type="number" step="any" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="stock" title="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" data-orig="<?php echo esc_attr($st[$loc]); ?>" value="<?php echo esc_attr($st[$loc]); ?>"<?php echo $this->loc_started($id,$loc) ? '' : ' data-wait="1"'; ?>><?php if ( ! $this->loc_started( $id, $loc ) ) : ?><br><button type="button" class="button button-small sbp-locstart" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" title="Voor <?php echo esc_attr(ucfirst($loc)); ?> is nog geen voorraad ingevuld: er worden nog geen verkopen afgeboekt en er zijn geen meldingen. Druk hier (of vul een getal in) zodra de voorraad klopt, ook als die 0 is.">⏳ Start</button><?php endif; ?></td>
                         <td><input class="small-text sbp-stock-number" type="number" min="0" step="1" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="min" title="<?php echo esc_attr(ucfirst($loc)); ?> – Minimumvoorraad" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Minimumvoorraad" data-orig="<?php echo esc_attr($st[$loc.'_min']); ?>" value="<?php echo esc_attr($st[$loc.'_min']); ?>"></td>
@@ -2864,10 +2991,28 @@ final class Schreuder_Bonusan_POS {
             </div>
             <?php endif; ?>
 
+            <details class="sbp-stock-card sbp-sup-card" id="sbp-suppliers">
+                <summary><strong>Fabrikanten en levertijden</strong> · <?php echo (int)count( $this->suppliers() ); ?> fabrikant(en)</summary>
+                <p class="description">Geef per fabrikant de levertijd in dagen. Producten die een fabrikant langer nodig heeft, krijgen een gele melding zodra je moet bestellen: de plugin kijkt dan niet alleen naar het minimum, maar bestelt "op tijd" (voorraad bij levering weer op gewenst). De fabrikant van een product wordt onthouden zodra je een bestelling registreert onder "Besteld bij een andere leverancier"; je kunt hem ook per product kiezen in de voorraadlijst. Bonusan staat altijd in de lijst (voor producten op de turflijst). Levertijd 0 = geen extra waarschuwingstijd.</p>
+                <?php
+                $sup_products = array();
+                foreach ( $products as $spid => $sprod ) { $sk = $this->supplier_for_product( $spid, $sprod ); if ( '' !== $sk ) { $sup_products[$sk][] = $sprod->get_name(); } }
+                ?>
+                <table class="widefat striped" style="max-width:900px"><thead><tr><th>Fabrikant</th><th>Levertijd (dagen)</th><th>Producten</th><th></th></tr></thead><tbody>
+                <?php foreach ( $this->suppliers() as $sk => $sv ) : $plist = $sup_products[$sk] ?? array(); sort( $plist, SORT_NATURAL | SORT_FLAG_CASE ); ?>
+                    <tr data-key="<?php echo esc_attr($sk); ?>"><td><strong><?php echo esc_html($sv['name']); ?></strong></td>
+                    <td><input type="number" min="0" max="365" step="1" class="small-text sbp-sup-lead" value="<?php echo esc_attr((int)$sv['lead']); ?>"> dagen</td>
+                    <td><?php if ( $plist ) : ?><details><summary><?php echo (int)count($plist); ?> product<?php echo count($plist)===1?'':'en'; ?></summary><small><?php echo esc_html( implode( ', ', $plist ) ); ?></small></details><?php else : ?><small>geen</small><?php endif; ?></td>
+                    <td><button type="button" class="button button-small sbp-sup-save">Opslaan</button> <span class="sbp-sup-msg" role="status"></span></td></tr>
+                <?php endforeach; ?>
+                </tbody></table>
+                <p style="margin-top:12px"><input type="text" id="sbp-sup-newname" class="regular-text" placeholder="Nieuwe fabrikant, bijv. Midra"> <input type="number" min="0" max="365" step="1" id="sbp-sup-newlead" class="small-text" placeholder="dagen"> <button type="button" class="button" id="sbp-sup-add">Fabrikant toevoegen</button> <span id="sbp-sup-newmsg" role="status"></span></p>
+            </details>
+
             <div class="sbp-stock-card" id="sbp-register-order">
                 <h2>Besteld bij een andere leverancier</h2>
                 <p class="description">Heb je buiten Bonusan om besteld, registreer het hier. Het staat dan als "onderweg" (telt mee in het advies en het voorraadsignaal) en je verwerkt de levering later met één klik onder <em>Onderweg</em>: ontvangen zoals besteld, deels met nalevering, of niet leverbaar.</p>
-                <p><label>Leverancier <input type="text" id="sbp-ro-supplier" class="regular-text" placeholder="bijv. naam van de fabrikant"></label> <label>Levering naar <select id="sbp-ro-location"><?php foreach ( $this->stock_locations() as $rl => $rlabel ) : ?><option value="<?php echo esc_attr($rl); ?>"><?php echo esc_html($rlabel); ?></option><?php endforeach; ?></select></label></p>
+                <p><label>Leverancier <input type="text" id="sbp-ro-supplier" class="regular-text" list="sbp-sup-list" placeholder="bijv. naam van de fabrikant" autocomplete="off"></label><datalist id="sbp-sup-list"><?php foreach ( $this->suppliers() as $sk => $sv ) { if ( 'bonusan' === $sk ) { continue; } echo '<option value="'.esc_attr($sv['name']).'">'; } ?></datalist> <label>Levering naar <select id="sbp-ro-location"><?php foreach ( $this->stock_locations() as $rl => $rlabel ) : ?><option value="<?php echo esc_attr($rl); ?>"><?php echo esc_html($rlabel); ?></option><?php endforeach; ?></select></label></p>
                 <div class="sbp-stock-search-wrap"><input type="search" id="sbp-ro-search" class="regular-text" placeholder="Zoek product op naam of SKU…" autocomplete="off"><div id="sbp-ro-results" class="sbp-stock-search-results" style="display:none"></div></div>
                 <table class="widefat striped" id="sbp-ro-table" style="max-width:700px;margin-top:10px;display:none"><thead><tr><th>Product</th><th>Aantal besteld</th><th></th></tr></thead><tbody></tbody></table>
                 <p><button type="button" class="button button-primary" id="sbp-ro-save" disabled>Registreer als onderweg</button> <span id="sbp-ro-msg" role="status"></span></p>
@@ -2954,6 +3099,7 @@ final class Schreuder_Bonusan_POS {
         </div>
         <style>
         details.sbp-shipment{border:1px solid #c3c4c7;border-radius:4px;margin:8px 0;background:#fff}details.sbp-shipment>summary{cursor:pointer;padding:10px 14px;font-size:14px}details.sbp-shipment>summary:hover{background:#f6f7f7}details.sbp-shipment[open]>summary{border-bottom:1px solid #c3c4c7;background:#f6f7f7}details.sbp-shipment>.sbp-stock-scroll,details.sbp-shipment>p{margin:12px 14px}
+        details.sbp-sup-card{padding:12px 18px}details.sbp-sup-card>summary{cursor:pointer;font-size:15px}details.sbp-sup-card td details summary{cursor:pointer;color:#2271b1}
         .sbp-lv-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:6px 0 12px}.sbp-lv-chip{border:2px solid;background:#fff;border-radius:6px;padding:8px 14px;cursor:pointer;text-align:left;font-size:15px;font-weight:700;line-height:1.3;min-width:190px}.sbp-lv-chip small{display:block;font-weight:400;font-size:12px;color:#50575e}.sbp-lv-chip .sbp-lv-n{display:inline-block;min-width:28px;text-align:center;border-radius:12px;color:#fff;padding:1px 8px;margin-right:6px}.sbp-lv-chip:not(.active){opacity:.45}
         .sbp-lv-chip-red{border-color:#d63638}.sbp-lv-chip-red .sbp-lv-n{background:#d63638}.sbp-lv-chip-orange{border-color:#e68a00}.sbp-lv-chip-orange .sbp-lv-n{background:#e68a00}.sbp-lv-chip-yellow{border-color:#dba617}.sbp-lv-chip-yellow .sbp-lv-n{background:#b88a00}
         #sbp-stock-advice-table td:first-child{min-width:240px}.sbp-lv-tools{margin-left:auto;align-self:center;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -3070,6 +3216,18 @@ final class Schreuder_Bonusan_POS {
                 }).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){i.data('saving',false);});
             }
             $(document).on('change','#sbp-stock-form .sbp-stock-number',function(){saveCell($(this));});
+            $(document).on('change','.sbp-sup-sel',function(){
+                let sel=$(this).prop('disabled',true);
+                post('sbp_stock_supplier',{product_id:sel.data('id'),supplier:sel.val()}).done(function(r){if(r.success){sel.css('outline','2px solid #00a32a');setTimeout(function(){sel.css('outline','');},900);}}).always(function(){sel.prop('disabled',false);});
+            });
+            $(document).on('click','.sbp-sup-save',function(){
+                let tr=$(this).closest('tr'),msg=tr.find('.sbp-sup-msg').css('color','').text('…');
+                post('sbp_supplier_save',{key:tr.data('key'),lead:tr.find('.sbp-sup-lead').val()}).done(function(r){msg.css('color',r.success?'#00700a':'#b32d2e').text(r.success?'✓ Opgeslagen':'');});
+            });
+            $('#sbp-sup-add').on('click',function(){
+                let msg=$('#sbp-sup-newmsg').css('color','').text('…');
+                post('sbp_supplier_add',{name:$('#sbp-sup-newname').val(),lead:$('#sbp-sup-newlead').val()||0}).done(function(r){if(r.success){msg.css('color','#00700a').text('✓ Toegevoegd');setTimeout(function(){location.reload();},700);}else{msg.text('');}});
+            });
             let roTimer=null;
             function roToggle(){let n=$('#sbp-ro-table tbody tr').length;$('#sbp-ro-table').toggle(n>0);$('#sbp-ro-save').prop('disabled',!n);}
             $('#sbp-ro-search').on('input',function(){let term=$(this).val().trim(),box=$('#sbp-ro-results');clearTimeout(roTimer);if(term.length<2){box.hide().empty();return;}roTimer=setTimeout(function(){post('sbp_stock_product_search',{term:term}).done(function(r){if(!r.success||!r.data.results.length){box.html('<div style="padding:9px">Geen product gevonden.</div>').show();return;}let h='';r.data.results.forEach(function(x){h+='<button type="button" class="sbp-stock-search-item sbp-ro-item" data-id="'+esc(x.id)+'" data-name="'+esc(x.name).replace(/"/g,'&quot;')+'" data-tracked="'+(x.tracked?'1':'')+'"><strong>'+esc(x.name)+'</strong><br><small>SKU '+esc(x.sku||'—')+(x.tracked?'':' · staat nog niet in Locatievoorraad')+'</small></button>';});box.html(h).show();});},250);});
