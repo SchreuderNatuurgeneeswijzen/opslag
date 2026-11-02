@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.21.1
+ * Version: 1.21.2
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.21.1';
+    const VERSION = '1.21.2';
 
     private static $instance = null;
 
@@ -2876,11 +2876,12 @@ final class Schreuder_Bonusan_POS {
             <?php $open_lines = SBP_Ledger::open_lines(); if ( $open_lines ) : $by_ship = array(); foreach ( $open_lines as $ol ) { $by_ship[$ol['shipment']][] = $ol; } ?>
             <div class="sbp-stock-card" id="sbp-inbound">
                 <h2>Onderweg – bestellingen</h2>
-                <p><label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Productnaam A → Z</option><option value="name_desc">Productnaam Z → A</option><option value="sku">SKU / artikelnummer laag → hoog</option><option value="sku_desc">SKU / artikelnummer hoog → laag</option></select></label></p>
+                <p><button type="button" class="button" id="sbp-ship-open">Alles uitklappen</button> <button type="button" class="button" id="sbp-ship-close">Alles inklappen</button> <label>Sorteren: <select class="sbp-sort-select"><option value="">Standaard volgorde</option><option value="name">Productnaam A → Z</option><option value="name_desc">Productnaam Z → A</option><option value="sku">SKU / artikelnummer laag → hoog</option><option value="sku_desc">SKU / artikelnummer hoog → laag</option></select></label></p>
                 <p class="description">Hier staan de gevolgde producten uit verzonden Bonusan-bestellingen en uit bestellingen die je zelf bij een andere leverancier hebt geregistreerd. De voorraad stijgt pas nadat je de levering accordeert. Klopt alles, klik dan op Akkoord. Is er iets afwijkend (deels, nalevering of niet leverbaar), geef dat bij die regel aan; de overige regels worden als ontvangen zoals besteld verwerkt. Wat nog onderweg is telt mee in het aanvuladvies.</p>
                 <?php foreach ( $by_ship as $ship => $lines ) : $first = $lines[0]; ?>
-                <div class="sbp-shipment" data-shipment="<?php echo esc_attr($ship); ?>" style="margin:14px 0">
-                    <h3>Naar <?php echo esc_html(ucfirst($first['location'])); ?> · verzonden <?php echo esc_html(get_date_from_gmt($first['created_gmt'],'d-m-Y H:i')); ?> <small><?php echo esc_html($first['subject']); ?></small><?php echo $first['note'] ? ' <em>('.esc_html($first['note']).')</em>' : ''; ?></h3>
+                <?php $ship_open = 0.0; foreach ( $lines as $sl ) { $ship_open += max( 0.0, (float)$sl['qty_ordered'] - (float)$sl['qty_received'] - (float)$sl['qty_cancelled'] ); } ?>
+                <details class="sbp-shipment" data-shipment="<?php echo esc_attr($ship); ?>">
+                    <summary><strong><?php echo esc_html($first['subject']); ?></strong> · <?php echo esc_html(get_date_from_gmt($first['created_gmt'],'d-m-Y H:i')); ?> · naar <?php echo esc_html(ucfirst($first['location'])); ?> · <?php echo (int)count($lines); ?> product<?php echo count($lines) === 1 ? '' : 'en'; ?>, <?php echo esc_html( rtrim( rtrim( number_format( $ship_open, 2, ',', '' ), '0' ), ',' ) ); ?> stuks onderweg<?php echo $first['note'] ? ' <em>('.esc_html($first['note']).')</em>' : ''; ?></summary>
                     <div class="sbp-stock-scroll"><table class="widefat striped"><thead><tr><th>Product</th><th>Besteld</th><th>Al ontvangen</th><th>Niet leverbaar</th><th>Nog onderweg</th><th>Hoe is het geleverd?</th><th>Aantal ontvangen</th></tr></thead><tbody>
                     <?php foreach ( $lines as $l ) : $open = round((float)$l['qty_ordered']-(float)$l['qty_received']-(float)$l['qty_cancelled'],3); ?>
                         <tr data-line="<?php echo esc_attr($l['id']); ?>" data-open="<?php echo esc_attr($open); ?>" data-name="<?php echo esc_attr($l['product_name']); ?>" data-sku="<?php echo esc_attr($l['sku']); ?>">
@@ -2892,7 +2893,7 @@ final class Schreuder_Bonusan_POS {
                     <?php endforeach; ?>
                     </tbody></table></div>
                     <p><button type="button" class="button button-primary sbp-receive-shipment">Akkoord: verwerk deze zending</button></p>
-                </div>
+                </details>
                 <?php endforeach; ?>
             </div>
             <?php endif; ?>
@@ -2952,6 +2953,7 @@ final class Schreuder_Bonusan_POS {
             </div>
         </div>
         <style>
+        details.sbp-shipment{border:1px solid #c3c4c7;border-radius:4px;margin:8px 0;background:#fff}details.sbp-shipment>summary{cursor:pointer;padding:10px 14px;font-size:14px}details.sbp-shipment>summary:hover{background:#f6f7f7}details.sbp-shipment[open]>summary{border-bottom:1px solid #c3c4c7;background:#f6f7f7}details.sbp-shipment>.sbp-stock-scroll,details.sbp-shipment>p{margin:12px 14px}
         .sbp-lv-bar{display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;margin:6px 0 12px}.sbp-lv-chip{border:2px solid;background:#fff;border-radius:6px;padding:8px 14px;cursor:pointer;text-align:left;font-size:15px;font-weight:700;line-height:1.3;min-width:190px}.sbp-lv-chip small{display:block;font-weight:400;font-size:12px;color:#50575e}.sbp-lv-chip .sbp-lv-n{display:inline-block;min-width:28px;text-align:center;border-radius:12px;color:#fff;padding:1px 8px;margin-right:6px}.sbp-lv-chip:not(.active){opacity:.45}
         .sbp-lv-chip-red{border-color:#d63638}.sbp-lv-chip-red .sbp-lv-n{background:#d63638}.sbp-lv-chip-orange{border-color:#e68a00}.sbp-lv-chip-orange .sbp-lv-n{background:#e68a00}.sbp-lv-chip-yellow{border-color:#dba617}.sbp-lv-chip-yellow .sbp-lv-n{background:#b88a00}
         #sbp-stock-advice-table td:first-child{min-width:240px}.sbp-lv-tools{margin-left:auto;align-self:center;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
@@ -3168,6 +3170,8 @@ final class Schreuder_Bonusan_POS {
                 post('sbp_stock_import_apply',{token:impToken,keys:JSON.stringify(keys),use_qty:$('#sbp-imp-useqty').is(':checked')?1:0,location:$('#sbp-imp-loc').val()||''}).done(function(r){if(r.success){$('#sbp-imp-status').text(r.data.message);setTimeout(function(){location.reload();},1800);}else{alert(r.data.message);}}).always(function(){b.prop('disabled',false);});
             });
             $(document).on('change','.sbp-recv-mode',function(){let tr=$(this).closest('tr'),m=$(this).val();tr.find('.sbp-recv-qty').toggle(m==='partial_wait'||m==='partial_cancel');});
+            $('#sbp-ship-open').on('click',function(){$('details.sbp-shipment').prop('open',true);});
+            $('#sbp-ship-close').on('click',function(){$('details.sbp-shipment').prop('open',false);});
             $(document).on('click','.sbp-receive-shipment',function(){let box=$(this).closest('.sbp-shipment'),changes=[];box.find('tbody tr').each(function(){let tr=$(this),mode=tr.find('.sbp-recv-mode').val();if(mode==='wait')return;changes.push({id:tr.data('line'),mode:mode,qty:tr.find('.sbp-recv-qty').val(),expected:String(tr.data('open'))});});if(!changes.length){alert('Er is niets om te verwerken.');return;}if(!confirm('Deze zending verwerken? De ontvangen aantallen worden bij de voorraad opgeteld.'))return;let b=$(this).prop('disabled',true);post('sbp_stock_receive',{changes:JSON.stringify(changes)}).done(function(r){if(r.success){location.reload();}else{alert(r.data.message);location.reload();}}).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){b.prop('disabled',false);});});
             $(document).on('click','.sbp-stock-remove',function(){if(!confirm('Dit product niet meer volgen in locatievoorraad? De voorraadhistorie blijft bewaard.'))return;let id=$(this).closest('tr').data('product-id');post('sbp_stock_remove_product',{product_id:id}).done(function(r){if(r.success)location.reload();});});
             $('.sbp-assign-location').on('click',function(){let b=$(this),row=b.closest('tr');post('sbp_assign_order_location',{order_id:row.data('order-id'),location:b.data('location')}).done(function(r){if(r.success){row.fadeOut(200,function(){location.reload();});}else alert(r.data.message||'Locatie kon niet worden opgeslagen.');});});
