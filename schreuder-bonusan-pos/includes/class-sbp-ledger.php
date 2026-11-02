@@ -231,6 +231,19 @@ final class SBP_Ledger {
         return $out;
     }
 
+    /** Product/locatie-combinaties met een expliciete invoer (telling, correctie, overboeking, levering), dus niet alleen verkopen. product_id => location => true */
+    public static function explicit_entries( array $product_ids ) {
+        global $wpdb;
+        $t = self::ledger_table();
+        $ids = array_values( array_unique( array_map( 'intval', $product_ids ) ) );
+        $out = array();
+        if ( ! $ids ) { return $out; }
+        $in = "'" . implode( "','", self::ORDER_REASONS ) . "'";
+        $rows = $wpdb->get_results( "SELECT DISTINCT product_id, location FROM $t WHERE reason NOT IN ($in) AND product_id IN (" . implode( ',', $ids ) . ')', ARRAY_A );
+        foreach ( (array) $rows as $row ) { $out[(int)$row['product_id']][(string)$row['location']] = true; }
+        return $out;
+    }
+
     /** Order-ID's met een positief netto geboekt aantal. */
     public static function booked_order_ids() {
         global $wpdb;
@@ -447,7 +460,7 @@ final class SBP_Ledger {
                 "UPDATE $t SET qty_received = qty_received + %f, qty_cancelled = qty_cancelled + %f, closed_gmt = " . ( $new_open <= 0.0005 ? $wpdb->prepare( '%s', gmdate( 'Y-m-d H:i:s' ) ) : 'NULL' ) . ' WHERE id = %d',
                 $receive, $cancel, $line_id
             ) );
-            return array( 'received' => $receive, 'cancelled' => $cancel, 'open_after' => max( 0.0, $new_open ), 'product_id' => $pid );
+            return array( 'received' => $receive, 'cancelled' => $cancel, 'open_after' => max( 0.0, $new_open ), 'product_id' => $pid, 'location' => $loc );
         } );
     }
 

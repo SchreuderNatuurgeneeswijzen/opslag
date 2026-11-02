@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.20.0
+ * Version: 1.21.0
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.20.0';
+    const VERSION = '1.21.0';
 
     private static $instance = null;
 
@@ -80,6 +80,7 @@ final class Schreuder_Bonusan_POS {
         add_action( 'untrashed_post', array( $this, 'on_post_untrashed' ) );
         add_action( 'sbp_reconcile_order', array( $this, 'reconcile_order' ) );
         add_action( 'init', array( $this, 'maybe_upgrade' ) );
+        add_action( 'init', array( $this, 'maybe_migrate_loc_start' ), 20 );
         add_action( 'admin_post_sbp_stock_log_csv', array( $this, 'download_stock_log_csv' ) );
         add_action( 'admin_notices', array( $this, 'dependency_notice' ) );
         add_action( 'admin_notices', array( $this, 'pending_stock_location_notice' ) );
@@ -989,7 +990,7 @@ final class Schreuder_Bonusan_POS {
             $product = $pid ? wc_get_product( $pid ) : false;
             if ( ! $product ) { continue; }
             $tid = $this->tracked_id_for_product( $product );
-            if ( ! $tid || ! $this->tracked_since( $tid ) || 'direct' !== $this->stock_mode( $product ) ) { continue; }
+            if ( ! $tid || ! $this->loc_started( $tid, $location ) || 'direct' !== $this->stock_mode( $product ) ) { continue; }
             $map[$k] = $tid;
         }
         if ( ! $map ) { return; }
@@ -1031,6 +1032,7 @@ final class Schreuder_Bonusan_POS {
             $tid = $product ? $this->tracked_id_for_product( $product ) : 0;
             if ( ! $tid ) { $items[$k]['stock_note'] = 'Staat niet in Locatievoorraad: geen voorraadgegevens.'; continue; }
             if ( ! $this->tracked_since( $tid ) ) { $items[$k]['stock_note'] = 'Wacht op beginvoorraad: nog geen voorraadgegevens.'; continue; }
+            if ( ! $this->loc_started( $tid, $location ) ) { $items[$k]['stock_note'] = 'Voorraad van ' . ucfirst( $location ) . ' is nog niet ingevuld: nog geen voorraadgegevens.'; continue; }
             $this->preload_stock( array( $tid ) );
             $st = $this->get_stock_state( $tid );
             $onway = (float)( SBP_Ledger::in_transit( array( $tid ) )[$tid][$location] ?? 0 );
@@ -1869,7 +1871,7 @@ final class Schreuder_Bonusan_POS {
             }
             try {
                 $res = SBP_Ledger::receive_line( $id, $recv, $cancel, $open, get_current_user_id() );
-                if ( $recv > 0 && ! empty( $res['product_id'] ) ) { $this->start_tracking( (int)$res['product_id'] ); }
+                if ( $recv > 0 && ! empty( $res['product_id'] ) ) { $this->start_location( (int)$res['product_id'], (string)( $res['location'] ?? '' ) ); }
                 $applied++;
             } catch ( SBP_Ledger_Exception $e ) {
                 $problems[] = 'regel #' . $id . ': ' . $e->getMessage();
@@ -1967,6 +1969,48 @@ final class Schreuder_Bonusan_POS {
     private function tracked_since( $product_id ) {
         $v = get_post_meta( (int)$product_id, '_sbp_loc_tracked_since', true );
         return is_numeric( $v ) ? max( 0, (int)$v ) : 0;
+    }
+
+    /**
+     * Per locatie: is er ooit een voorraad ingevuld (telling, correctie, levering of overboeking naar die locatie)?
+     * Zolang dat niet zo is, boekt de plugin voor die locatie niets af en geeft ze geen meldingen of advies:
+     * een locatie zonder bevestigde voorraad hoort nog niet mee te doen.
+     */
+    private function loc_since( $product_id, $loc ) {
+        $v = get_post_meta( (int)$product_id, '_sbp_loc_started_' . $loc, true );
+        return is_numeric( $v ) ? max( 0, (int)$v ) : 0;
+    }
+
+    private function loc_started( $product_id, $loc ) { return $this->loc_since( $product_id, $loc ) > 0; }
+
+    private function start_location( $product_id, $loc ) {
+        if ( ! isset( $this->stock_locations()[$loc] ) ) { return; }
+        if ( ! $this->loc_since( $product_id, $loc ) ) { update_post_meta( (int)$product_id, '_sbp_loc_started_' . $loc, time() ); }
+        $this->start_tracking( $product_id );
+    }
+
+    /** Terug naar "wacht op beginvoorraad" voor alle locaties. */
+    private function reset_tracking( $product_id ) {
+        delete_post_meta( (int)$product_id, '_sbp_loc_tracked_since' );
+        foreach ( $this->stock_locations() as $loc => $label ) { delete_post_meta( (int)$product_id, '_sbp_loc_started_' . $loc ); }
+    }
+
+    /** Eenmalig: bepaalt voor producten die al werden gevolgd welke locaties al een voorraad hebben gehad. */
+    public function maybe_migrate_loc_start() {
+        if ( ! class_exists( 'WooCommerce' ) || get_option( 'sbp_locstart_v1' ) ) { return; }
+        $products = $this->get_tracked_products();
+        $ids = array_keys( $products );
+        $explicit = $ids ? SBP_Ledger::explicit_entries( $ids ) : array();
+        $this->preload_stock( $ids );
+        foreach ( $ids as $id ) {
+            $since = $this->tracked_since( $id );
+            if ( $since <= 0 ) { continue; }
+            foreach ( $this->stock_locations() as $loc => $label ) {
+                if ( $this->loc_since( $id, $loc ) > 0 ) { continue; }
+                if ( ! empty( $explicit[$id][$loc] ) || $this->stock_number( $id, 'stock', $loc ) > 0.0005 ) { update_post_meta( $id, '_sbp_loc_started_' . $loc, $since ); }
+            }
+        }
+        update_option( 'sbp_locstart_v1', time() );
     }
 
     /** Start de administratie van dit product (bij het eerste invoeren van een getelde voorraad of levering). */
@@ -2085,8 +2129,8 @@ final class Schreuder_Bonusan_POS {
             $booked_here = isset( $bookings[$pid] ) || isset( $legacy['lines'][$pid] );
             $loc = $booked_here ? ( $bookings[$pid]['location'] ?? ( $legacy['location'] ?? '' ) ) : $location;
             if ( '' === $loc ) { if ( $want > 0 ) { $pending = true; } continue; } // extra/onbekende kassa: wacht op keuze
-            $since = $this->tracked_since( $pid );
-            if ( $since <= 0 && ! $booked_here ) { continue; } // wacht op beginvoorraad: nog niets afboeken
+            $since = $this->loc_since( $pid, $loc );
+            if ( $since <= 0 && ! $booked_here ) { continue; } // deze locatie wacht op beginvoorraad: nog niets afboeken
             try {
                 SBP_Ledger::reconcile_line( $order_id, $pid, $loc, $want, (float)( $legacy['lines'][$pid] ?? 0 ), $since > 0 && $created_ts >= $since, array_merge( $this->stock_info( $pid ), array( 'user_id' => get_current_user_id() ) ) );
             } catch ( Throwable $e ) {
@@ -2360,9 +2404,9 @@ final class Schreuder_Bonusan_POS {
             foreach ( $products as $id => $product ) {
                 if ( ! $this->tracked_since( $id ) ) { continue; }
                 $s = $this->get_stock_state($id);
-                if ( ($s['baarn_target'] > 0 && $s['baarn'] <= $s['baarn_min']) ||
-                     ($s['haarlem_target'] > 0 && $s['haarlem'] <= $s['haarlem_min']) ||
-                     ($s['zwolle_target'] > 0 && $s['zwolle'] <= $s['zwolle_min']) ) { $count++; }
+                if ( ($this->loc_started($id,'baarn') && $s['baarn_target'] > 0 && $s['baarn'] <= $s['baarn_min']) ||
+                     ($this->loc_started($id,'haarlem') && $s['haarlem_target'] > 0 && $s['haarlem'] <= $s['haarlem_min']) ||
+                     ($this->loc_started($id,'zwolle') && $s['zwolle_target'] > 0 && $s['zwolle'] <= $s['zwolle_min']) ) { $count++; }
             }
             set_transient( 'sbp_stock_alert_count', $count, 5 * MINUTE_IN_SECONDS );
         }
@@ -2430,20 +2474,22 @@ final class Schreuder_Bonusan_POS {
         $eff = array();
         foreach ( $this->stock_locations() as $loc => $label ) { $eff[$loc] = $s[$loc] + (float)( $transit[$loc] ?? 0 ); }
         $turf_route = $this->is_any_turflist_product( $product );
+        $started = array();
+        foreach ( $this->stock_locations() as $loc => $label ) { $started[$loc] = $this->loc_started( $product_id, $loc ); }
         $need = array(); $below_min = array();
         foreach ( $this->stock_locations() as $loc => $label ) {
             // Minimum = signaal (voorraad op of onder het minimum). Bonusan-producten met eigen bestelling
             // worden aangevuld tot gewenst zodra voorraad + onderweg onder gewenst zit; bij overige
             // leveranciers en bij doorleveren vanuit Baarn is het minimum het moment om te bestellen.
-            $below_min[$loc] = ( $s[$loc.'_target'] > 0 && $eff[$loc] <= $s[$loc.'_min'] ); // onderweg telt mee: al bestelde voorraad geeft geen signaal
+            $below_min[$loc] = ( $started[$loc] && $s[$loc.'_target'] > 0 && $eff[$loc] <= $s[$loc.'_min'] ); // onderweg telt mee: al bestelde voorraad geeft geen signaal
             $by_target = ( 'direct' === $mode && $turf_route );
             $trigger = $by_target ? ( $eff[$loc] < $s[$loc.'_target'] ) : ( $eff[$loc] <= $s[$loc.'_min'] );
-            $need[$loc] = ( $s[$loc.'_target'] > 0 && $trigger ) ? max( 0, $s[$loc.'_target'] - $eff[$loc] ) : 0;
+            $need[$loc] = ( $started[$loc] && $s[$loc.'_target'] > 0 && $trigger ) ? max( 0, $s[$loc.'_target'] - $eff[$loc] ) : 0;
         }
         if ( 'transfer' === $mode ) {
             $h_need = $need['haarlem']; $z_need = $need['zwolle'];
             $baarn_after_transfers = $eff['baarn'] - $h_need - $z_need;
-            $external_need = ( $s['baarn_target'] > 0 && $baarn_after_transfers <= $s['baarn_min'] ) ? max( 0, $s['baarn_target'] - $baarn_after_transfers ) : 0;
+            $external_need = ( $started['baarn'] && $s['baarn_target'] > 0 && $baarn_after_transfers <= $s['baarn_min'] ) ? max( 0, $s['baarn_target'] - $baarn_after_transfers ) : 0;
             $own_need = array( 'baarn' => 0, 'haarlem' => 0, 'zwolle' => 0 );
         } else {
             // Iedere locatie bestelt zelf bij Bonusan: geen transfer vanuit Baarn.
@@ -2470,25 +2516,25 @@ final class Schreuder_Bonusan_POS {
             $tempo = $low_data ? 0.0 : ceil( max( $m30, $m90 ) * 1.25 );
             // Dagtempo (zonder 25% marge) en de verwachte dagen tot voorraad + onderweg het minimum bereikt; lineaire inschatting.
             $daily[$loc] = $low_data ? 0.0 : max( $m30, $m90 ) / 30;
-            $days_to_min[$loc] = ( $s[$loc.'_target'] > 0 && ! $low_data && $daily[$loc] > 0 && $eff[$loc] > $s[$loc.'_min'] ) ? ( $eff[$loc] - $s[$loc.'_min'] ) / $daily[$loc] : null;
+            $days_to_min[$loc] = ( $started[$loc] && $s[$loc.'_target'] > 0 && ! $low_data && $daily[$loc] > 0 && $eff[$loc] > $s[$loc.'_min'] ) ? ( $eff[$loc] - $s[$loc.'_min'] ) / $daily[$loc] : null;
             $smart[$loc] = max( (float)$s[$loc.'_target'], $tempo, (float)$s[$loc.'_min'] );
         }
         // Signaal richting leverancier: bij doorleveren vanuit Baarn (verborgen product dat Bonusan niet levert) gaat het om
         // de voorraad van Baarn nadat Haarlem en Zwolle zijn aangevuld, en trekken alle locaties op dezelfde voorraad.
-        $signal = array( 'baarn' => true, 'haarlem' => true, 'zwolle' => true );
+        $signal = $started;
         $order_qty = $own_need;
         if ( 'transfer' === $mode ) {
             $signal['haarlem'] = false; $signal['zwolle'] = false;
-            $below_min['baarn'] = ( $s['baarn_target'] > 0 && $baarn_after_transfers <= $s['baarn_min'] );
+            $below_min['baarn'] = ( $started['baarn'] && $s['baarn_target'] > 0 && $baarn_after_transfers <= $s['baarn_min'] );
             $pool = ( $daily['baarn'] ?? 0 ) + ( $daily['haarlem'] ?? 0 ) + ( $daily['zwolle'] ?? 0 );
-            $days_to_min['baarn'] = ( $s['baarn_target'] > 0 && ! $low_data && $pool > 0 && $baarn_after_transfers > $s['baarn_min'] ) ? ( $baarn_after_transfers - $s['baarn_min'] ) / $pool : null;
+            $days_to_min['baarn'] = ( $started['baarn'] && $s['baarn_target'] > 0 && ! $low_data && $pool > 0 && $baarn_after_transfers > $s['baarn_min'] ) ? ( $baarn_after_transfers - $s['baarn_min'] ) / $pool : null;
             $days_to_min['haarlem'] = null; $days_to_min['zwolle'] = null;
             $daily['baarn'] = $pool; // het tempo waarmee de Baarn-voorraad leegloopt, inclusief wat naar Haarlem en Zwolle gaat
             $order_qty = array( 'baarn' => $external_need, 'haarlem' => 0, 'zwolle' => 0 );
         }
         $turf = $this->is_any_turflist_product( $product );
         $out_row = array_merge( $s, array(
-            'signal' => $signal, 'order_qty' => $order_qty,
+            'signal' => $signal, 'started' => $started, 'order_qty' => $order_qty,
             'name' => $product->get_name(), 'sku' => $product->get_sku(),
             'to_haarlem' => $h_need, 'to_zwolle' => $z_need,
             'baarn_after_transfers' => $baarn_after_transfers,
@@ -2520,6 +2566,7 @@ final class Schreuder_Bonusan_POS {
         foreach ( $this->stock_locations() as $loc => $label ) {
             $st = (float)$a[$loc]; $min = (float)$a[$loc.'_min']; $tg = (float)$a[$loc.'_target'];
             $onway = (float)( $a['in_transit'][$loc] ?? 0 );
+            if ( empty( $a['started'][$loc] ) ) { continue; } // voor deze locatie is nog geen voorraad ingevuld
             if ( ( $tg > 0 || $min > 0 ) && $st <= 0 ) {
                 $rank = max( $rank, 3 );
                 $reasons[] = array( 'level' => 'red', 'text' => $label . ': voorraad ' . ( $st < 0 ? 'negatief (' . $fmt( $st ) . ')' : 'leeg' ) . ( $onway > 0 ? ', ' . $fmt( $onway ) . ' onderweg' : '' ) . ': controleer hoe dit komt' );
@@ -2692,9 +2739,9 @@ final class Schreuder_Bonusan_POS {
         $st = $this->get_stock_state( $id );
         ob_start();
         ?>
-                    <tr data-product-id="<?php echo esc_attr($id); ?>" data-name="<?php echo esc_attr($product->get_name()); ?>" data-sku="<?php echo esc_attr($product->get_sku()); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><?php if ( ! $this->tracked_since( $id ) ) : ?><br><span class="sbp-wait">⏳ Wacht op beginvoorraad: verkopen worden pas afgeboekt en er is pas advies nadat je de getelde voorraad hebt bevestigd. Is de voorraad echt 0? Typ dan 0 niet in, maar druk op de knop. <button type="button" class="button button-small sbp-start" data-id="<?php echo esc_attr($id); ?>">Voorraad klopt (ook 0): start</button></span><?php endif; ?><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
+                    <tr data-product-id="<?php echo esc_attr($id); ?>" data-name="<?php echo esc_attr($product->get_name()); ?>" data-sku="<?php echo esc_attr($product->get_sku()); ?>"><td><strong><?php echo esc_html($product->get_name()); ?></strong><br><small>Aanvulling: <select class="sbp-stock-mode" data-id="<?php echo esc_attr($id); ?>"><?php $mv = get_post_meta($id,'_sbp_loc_mode',true); foreach(array(''=>'Automatisch ('.('transfer'===$this->stock_mode($product)?'vanuit Baarn':'eigen bestelling').')','transfer'=>'Vanuit Baarn naar Haarlem/Zwolle','direct'=>'Eigen bestelling per locatie') as $k=>$lbl){ echo '<option value="'.esc_attr($k).'"'.selected($mv,$k,false).'>'.esc_html($lbl).'</option>'; } ?></select></small><?php if ( ! $this->tracked_since( $id ) ) : ?><br><span class="sbp-wait">⏳ Wacht op beginvoorraad: vul per locatie de getelde voorraad in. Is een locatie echt 0, druk dan bij die locatie op "Start".</span><?php endif; ?><br><small>SKU <?php echo esc_html($product->get_sku() ?: '—'); ?></small></td>
                     <?php foreach(array('baarn','haarlem','zwolle') as $loc): ?>
-                        <td><input class="small-text sbp-stock-number<?php echo $st[$loc] < 0 ? ' sbp-neg' : ''; ?>" type="number" step="any" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="stock" title="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" data-orig="<?php echo esc_attr($st[$loc]); ?>" value="<?php echo esc_attr($st[$loc]); ?>"></td>
+                        <td><input class="small-text sbp-stock-number<?php echo $st[$loc] < 0 ? ' sbp-neg' : ''; ?>" type="number" step="any" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="stock" title="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Voorraad nu" data-orig="<?php echo esc_attr($st[$loc]); ?>" value="<?php echo esc_attr($st[$loc]); ?>"<?php echo $this->loc_started($id,$loc) ? '' : ' data-wait="1"'; ?>><?php if ( ! $this->loc_started( $id, $loc ) ) : ?><br><button type="button" class="button button-small sbp-locstart" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" title="Voor <?php echo esc_attr(ucfirst($loc)); ?> is nog geen voorraad ingevuld: er worden nog geen verkopen afgeboekt en er zijn geen meldingen. Druk hier (of vul een getal in) zodra de voorraad klopt, ook als die 0 is.">⏳ Start</button><?php endif; ?></td>
                         <td><input class="small-text sbp-stock-number" type="number" min="0" step="1" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="min" title="<?php echo esc_attr(ucfirst($loc)); ?> – Minimumvoorraad" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Minimumvoorraad" data-orig="<?php echo esc_attr($st[$loc.'_min']); ?>" value="<?php echo esc_attr($st[$loc.'_min']); ?>"></td>
                         <td><input class="small-text sbp-stock-number" type="number" min="0" step="1" data-id="<?php echo esc_attr($id); ?>" data-loc="<?php echo esc_attr($loc); ?>" data-type="target" title="<?php echo esc_attr(ucfirst($loc)); ?> – Gewenste voorraad" aria-label="<?php echo esc_attr(ucfirst($loc)); ?> – Gewenste voorraad" data-orig="<?php echo esc_attr($st[$loc.'_target']); ?>" value="<?php echo esc_attr($st[$loc.'_target']); ?>"></td>
                     <?php endforeach; ?>
@@ -3001,11 +3048,11 @@ final class Schreuder_Bonusan_POS {
             $(document).on('click','.sbp-stock-search-item',function(){pickResult($(this));});
             function saveCell(i){
                 let orig=String(i.data('orig')),val=i.val();
-                if(val===''||(parseFloat(val)===parseFloat(orig)&&!(i.data('type')==='stock'&&i.closest('tr').find('.sbp-wait').length))||i.data('saving'))return;
+                if(val===''||(parseFloat(val)===parseFloat(orig)&&!(i.data('type')==='stock'&&i.attr('data-wait')))||i.data('saving'))return;
                 i.data('saving',true).css('outline','2px solid #dba617');
                 let c={id:i.data('id'),loc:i.data('loc'),type:i.data('type'),value:val};if(c.type==='stock')c.expected=orig;
                 post('sbp_stock_save',{changes:JSON.stringify([c])}).done(function(r){
-                    if(r.success){i.data('orig',val).css('outline','2px solid #00a32a');setTimeout(function(){i.css('outline','');},900);if(c.type==='stock'){i.closest('tr').find('.sbp-wait').remove();}}
+                    if(r.success){i.data('orig',val).css('outline','2px solid #00a32a');setTimeout(function(){i.css('outline','');},900);if(c.type==='stock'){i.removeAttr('data-wait');i.closest('td').find('.sbp-locstart').remove();i.closest('tr').find('.sbp-wait').remove();}}
                 }).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){i.data('saving',false);});
             }
             $(document).on('change','#sbp-stock-form .sbp-stock-number',function(){saveCell($(this));});
@@ -3045,14 +3092,13 @@ final class Schreuder_Bonusan_POS {
                     if(r.success){$('#sbp-ro-msg').css('color','#00700a').text('✓ '+r.data.message);setTimeout(function(){location.reload();},1200);}else{b.prop('disabled',false);}
                 }).fail(function(){b.prop('disabled',false);});
             });
-            $(document).on('click','.sbp-start',function(){
-                let b=$(this),tr=b.closest('tr'),changes=[],ins=tr.find('.sbp-stock-number[data-type="stock"]');
-                ins.each(function(){let i=$(this),v=i.val();if(v==='')v='0';changes.push({id:i.data('id'),loc:i.data('loc'),type:'stock',value:v,expected:String(i.data('orig'))});});
+            $(document).on('click','.sbp-locstart',function(){
+                let b=$(this),i=b.closest('td').find('.sbp-stock-number'),v=i.val();if(v==='')v='0';
                 b.prop('disabled',true);
-                post('sbp_stock_save',{changes:JSON.stringify(changes)}).done(function(r){
-                    if(r.success){ins.each(function(){let i=$(this);if(i.val()==='')i.val('0');i.data('orig',i.val());});tr.find('.sbp-wait').remove();}
+                post('sbp_stock_save',{changes:JSON.stringify([{id:i.data('id'),loc:i.data('loc'),type:'stock',value:v,expected:String(i.data('orig'))}])}).done(function(r){
+                    if(r.success){i.val(v).data('orig',v).removeAttr('data-wait');b.remove();i.closest('tr').find('.sbp-wait').remove();}
                     else{alert(r.data&&r.data.message?r.data.message:'Opslaan mislukt.');b.prop('disabled',false);}
-                }).fail(function(){setTimeout(function(){location.reload();},300);});
+                }).fail(function(){b.prop('disabled',false);});
             });
             $('#sbp-stock-form').on('submit',function(e){e.preventDefault();let changes=[];$('.sbp-stock-number').each(function(){let i=$(this),orig=String(i.data('orig')),val=i.val();if(val===''||parseFloat(val)===parseFloat(orig)||i.data('saving'))return;let c={id:i.data('id'),loc:i.data('loc'),type:i.data('type'),value:val};if(c.type==='stock')c.expected=orig;changes.push(c);});if(!changes.length){$('#sbp-stock-save-status').text('Alles is al opgeslagen.');return;}let btn=$(this).find('button[type=submit]').prop('disabled',true);post('sbp_stock_save',{changes:JSON.stringify(changes)}).done(function(r){if(r.success){$('#sbp-stock-save-status').text('Opgeslagen');setTimeout(function(){location.reload();},500);}else{alert(r.data.message||'Opslaan mislukt.');}}).fail(function(){setTimeout(function(){location.reload();},300);}).always(function(){btn.prop('disabled',false);});});
             $(document).on('change','.sbp-stock-mode',function(){post('sbp_stock_mode',{product_id:$(this).data('id'),mode:$(this).val()}).done(function(){location.reload();});});
@@ -3188,7 +3234,7 @@ final class Schreuder_Bonusan_POS {
         if ( 'yes' !== get_post_meta( $id, '_sbp_location_stock_enabled', true ) ) {
             // Het product wacht op de getelde beginvoorraad; pas daarna worden verkopen afgeboekt.
             update_post_meta( $id, '_sbp_location_stock_enabled', 'yes' );
-            delete_post_meta( $id, '_sbp_loc_tracked_since' );
+            $this->reset_tracking( $id );
         }
         foreach ( $this->stock_locations() as $loc => $label ) {
             foreach ( array( 'min', 'target' ) as $type ) {
@@ -3221,7 +3267,7 @@ final class Schreuder_Bonusan_POS {
             if ( ! is_numeric( $expected ) ) { $conflicts[] = $info['name'] . ' (' . ucfirst( $loc ) . '): geen verwachte waarde meegestuurd.'; continue; }
             try {
                 SBP_Ledger::set_absolute( $id, $loc, $value, (float)$expected, 'Telling/correctie in locatieoverzicht', get_current_user_id(), $info );
-                $this->start_tracking( $id );
+                $this->start_location( $id, $loc );
                 $applied++;
             } catch ( SBP_Ledger_Exception $e ) {
                 $conflicts[] = $info['name'] . ' (' . ucfirst( $loc ) . '): ' . $e->getMessage();
@@ -3419,7 +3465,7 @@ final class Schreuder_Bonusan_POS {
             if ( ! $product || $this->is_consult_product( $product ) ) { continue; }
             if ( 'yes' !== get_post_meta( $id, '_sbp_location_stock_enabled', true ) ) {
                 update_post_meta( $id, '_sbp_location_stock_enabled', 'yes' );
-                delete_post_meta( $id, '_sbp_loc_tracked_since' ); // wacht op getelde beginvoorraad
+                $this->reset_tracking( $id ); // wacht op getelde beginvoorraad
                 foreach ( $this->stock_locations() as $loc => $label ) {
                     foreach ( array( 'min', 'target' ) as $type ) {
                         $mk = $this->stock_meta_key( $type, $loc );
@@ -3429,10 +3475,10 @@ final class Schreuder_Bonusan_POS {
                 $added++;
             } else { $already++; }
             if ( $use_qty && ! empty( $row['qty'] ) ) {
-                if ( $this->tracked_since( $id ) > 0 ) { $skipped_qty[] = $product->get_name(); continue; } // bestaande voorraad nooit overschrijven
+                if ( $this->loc_started( $id, $location ) ) { $skipped_qty[] = $product->get_name(); continue; } // bestaande voorraad nooit overschrijven
                 try {
                     SBP_Ledger::set_absolute( $id, $location, (float)$row['qty'], SBP_Ledger::quantity( $id, $location ), 'Beginvoorraad uit Excel-import', get_current_user_id(), $this->stock_info( $id ) );
-                    $this->start_tracking( $id );
+                    $this->start_location( $id, $location );
                     $stocked++;
                 } catch ( SBP_Ledger_Exception $e ) { $skipped_qty[] = $product->get_name(); }
             }
@@ -3486,7 +3532,7 @@ final class Schreuder_Bonusan_POS {
             }
         }
         update_post_meta( $id, '_sbp_location_stock_enabled', 'yes' );
-        delete_post_meta( $id, '_sbp_loc_tracked_since' ); // start pas bij de eerste ingevoerde voorraad
+        $this->reset_tracking( $id ); // start pas bij de eerste ingevoerde voorraad
         foreach ( $this->stock_locations() as $loc => $label ) {
             foreach ( array( 'min', 'target' ) as $type ) { $this->set_stock_number( $id, $type, $loc, $parsed[$loc][$type] ?? 0 ); }
         }
@@ -3495,10 +3541,10 @@ final class Schreuder_Bonusan_POS {
             if ( ! isset( $parsed[$loc]['stock'] ) ) { continue; }
             try {
                 SBP_Ledger::set_absolute( $id, $loc, $parsed[$loc]['stock'], SBP_Ledger::quantity( $id, $loc ), 'Beginvoorraad ingevoerd bij toevoegen', get_current_user_id(), $info );
+                $this->start_location( $id, $loc );
                 $stocked++;
             } catch ( SBP_Ledger_Exception $e ) { $problems[] = $label . ': ' . $e->getMessage(); }
         }
-        if ( $stocked ) { $this->start_tracking( $id ); }
         $this->forget_stock_cache();
         if ( $problems ) {
             wp_send_json_error( array( 'message' => 'Het product is toegevoegd, maar de voorraad is niet overal opgeslagen: ' . implode( '; ', $problems ) . '. De pagina wordt opnieuw geladen.' ), 500 );
@@ -3533,7 +3579,7 @@ final class Schreuder_Bonusan_POS {
         $delta = (float)$raw;
         try {
             SBP_Ledger::adjust( $id, $loc, $delta, $delta > 0 ? 'manual_in' : 'manual_out', $note ?: 'Handmatige voorraadcorrectie', get_current_user_id(), $this->stock_info( $id ) );
-            $this->start_tracking( $id );
+            $this->start_location( $id, $loc );
         } catch ( SBP_Ledger_Exception $e ) {
             wp_send_json_error( array( 'message' => $e->getMessage() ), 400 );
         }
@@ -3554,6 +3600,7 @@ final class Schreuder_Bonusan_POS {
         $qty = (float)$raw;
         try {
             SBP_Ledger::transfer( $id, $from, $to, $qty, 'Interne transfer ' . ucfirst( $from ) . ' → ' . ucfirst( $to ), get_current_user_id(), $this->stock_info( $id ) );
+            $this->start_location( $id, $to );
         } catch ( SBP_Ledger_Exception $e ) {
             wp_send_json_error( array( 'message' => $e->getMessage() ), 400 );
         }
@@ -3594,6 +3641,7 @@ final class Schreuder_Bonusan_POS {
         foreach ( $lines as $l ) {
             try {
                 SBP_Ledger::transfer( $l['id'], $from, $to, $l['qty'], 'Interne transfer ' . ucfirst( $from ) . ' → ' . ucfirst( $to ) . ' (lijst)', get_current_user_id(), $this->stock_info( $l['id'] ) );
+                $this->start_location( $l['id'], $to );
                 $done[] = $l['name'];
             } catch ( SBP_Ledger_Exception $e ) {
                 $failed[] = $l['name'] . ': ' . $e->getMessage();

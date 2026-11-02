@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.20.0
+Stable tag: 1.21.0
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,11 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.21.0 =
+* Per locatie pas meedoen nadat er voorraad is ingevuld. Een locatie telt pas mee zodra er voor dat product voor die locatie een voorraad is ingevuld (telling, correctie, levering, Excel-import of overboeking naar die locatie). Tot die tijd: geen afboeking van kassaverkopen (dus geen negatieve voorraad), geen kleurmeldingen (rood/oranje/geel), geen e-mailsignaal, geen bestelvoorstel en geen voorraadregel op de turflijst voor die locatie. Zodra je de voorraad invult, geldt alles vanaf dat moment; eerdere verkopen worden niet achteraf afgeboekt.
+* Bij locaties die nog wachten staat in de voorraadlijst een knop "Start": die bevestigt de getoonde voorraad (ook 0). Het invullen van een getal werkt ook, ook als het gelijk is aan wat er staat.
+* Bestaande producten worden eenmalig omgezet: een locatie geldt als gestart als er ooit een telling, correctie, overboeking of levering voor is geweest, of als er voorraad boven 0 staat. Een locatie waar alleen verkopen zijn afgeboekt (bijv. met negatieve voorraad) wacht dus tot je de voorraad invult.
 
 = 1.20.0 =
 * Aanvuladvies met kleuren en filter (Locatievoorraad): bovenaan drie knoppen met het aantal producten: Rood (voorraad leeg of negatief: controleer hoe dit komt), Oranje (op of onder het minimum: direct bestellen, met het aantal) en Geel (komt binnen het ingestelde aantal dagen op het minimum). Standaard staan alleen die drie in de lijst, rood bovenaan; je kunt kleuren aan- en uitzetten. Met het zoekveld vind je ook een product zonder melding, en "Toon alle producten" laat de hele lijst zien. Per regel staat in woorden waarom (en voor welke locatie), zodat het niet alleen aan de kleur hangt.
