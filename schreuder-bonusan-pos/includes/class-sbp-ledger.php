@@ -272,10 +272,15 @@ final class SBP_Ledger {
         return $out;
     }
 
-    public static function log_rows( $product_id = 0, $limit = 200, $offset = 0 ) {
+    public static function log_rows( $product_id = 0, $limit = 200, $offset = 0, $location = '', $from_gmt = '', $to_gmt = '' ) {
         global $wpdb;
         $t = self::ledger_table();
-        $where = $product_id ? $wpdb->prepare( 'WHERE product_id = %d', $product_id ) : '';
+        $conds = array();
+        if ( $product_id ) { $conds[] = $wpdb->prepare( 'product_id = %d', $product_id ); }
+        if ( '' !== $location ) { $conds[] = $wpdb->prepare( 'location = %s', $location ); }
+        if ( '' !== $from_gmt ) { $conds[] = $wpdb->prepare( 'created_gmt >= %s', $from_gmt ); }
+        if ( '' !== $to_gmt ) { $conds[] = $wpdb->prepare( 'created_gmt <= %s', $to_gmt ); }
+        $where = $conds ? 'WHERE ' . implode( ' AND ', $conds ) : '';
         return (array) $wpdb->get_results( $wpdb->prepare( "SELECT * FROM $t $where ORDER BY id DESC LIMIT %d OFFSET %d", $limit, $offset ), ARRAY_A );
     }
 

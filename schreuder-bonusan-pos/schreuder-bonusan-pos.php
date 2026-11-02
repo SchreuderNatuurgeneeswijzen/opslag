@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Schreuder Bonusan POS Bestellingen
  * Description: Maakt per locatie een aaneengesloten Bonusan-bestellijst vanuit WooCommerce/YITH POS-orders, toont eerst een controle en verzendt daarna het Excel-bestand.
- * Version: 1.21.0
+ * Version: 1.21.1
  * Author: Schreuder Natuurgeneeswijzen
  * Requires at least: 6.2
  * Requires PHP: 8.0
@@ -23,7 +23,7 @@ add_action( 'before_woocommerce_init', function () {
 final class Schreuder_Bonusan_POS {
     const OPTION = 'sbp_settings';
     const NONCE  = 'sbp_nonce';
-    const VERSION = '1.21.0';
+    const VERSION = '1.21.1';
 
     private static $instance = null;
 
@@ -2756,7 +2756,13 @@ final class Schreuder_Bonusan_POS {
         $advice = $this->get_stock_advice_rows(false);
         $pending = $this->pending_stock_orders();
         $log_filter = absint( $_GET['log_product'] ?? 0 );
-        $log = SBP_Ledger::log_rows( $log_filter, 200 );
+        $log_loc = sanitize_key( (string)( $_GET['log_location'] ?? '' ) );
+        if ( ! isset( $this->stock_locations()[$log_loc] ) ) { $log_loc = ''; }
+        $log_from = $this->log_date( $_GET['log_from'] ?? '' );
+        $log_to = $this->log_date( $_GET['log_to'] ?? '' );
+        // Het logboek wordt alleen opgehaald en getoond als er is gezocht (locatie, periode en/of product).
+        $log_searched = ( $log_filter || '' !== $log_loc || '' !== $log_from || '' !== $log_to );
+        $log = $log_searched ? SBP_Ledger::log_rows( $log_filter, 200, 0, $log_loc, $this->log_bound( $log_from, false ), $this->log_bound( $log_to, true ) ) : array();
         $nonce = wp_create_nonce(self::NONCE);
         ?>
         <div class="wrap sbp-stock-wrap">
@@ -2918,13 +2924,19 @@ final class Schreuder_Bonusan_POS {
                 </tbody></table></div><?php endif; ?>
             </div>
 
-            <div class="sbp-stock-card"><h2>Voorraadlogboek</h2>
-                <form method="get" style="margin-bottom:10px"><input type="hidden" name="page" value="schreuder-bonusan-stock">
-                    <select name="log_product"><option value="0">Alle producten</option><?php foreach($products as $pid=>$pr){ echo '<option value="'.esc_attr($pid).'"'.selected($log_filter,$pid,false).'>'.esc_html($pr->get_name()).'</option>'; } ?></select>
-                    <button class="button">Filter</button>
-                    <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url('admin-post.php?action=sbp_stock_log_csv&log_product='.(int)$log_filter), 'sbp_stock_log_csv' ) ); ?>">Exporteer volledige historie (CSV)</a>
+            <div class="sbp-stock-card" id="sbp-log"><h2>Voorraadlogboek</h2>
+                <p class="description">Het logboek staat dicht. Zoek op locatie, periode en/of product om de mutaties te zien.</p>
+                <form method="get" action="<?php echo esc_url( admin_url( 'admin.php' ) . '#sbp-log' ); ?>" style="margin-bottom:10px"><input type="hidden" name="page" value="schreuder-bonusan-stock">
+                    <label>Locatie <select name="log_location"><option value="">Alle locaties</option><?php foreach ( $this->stock_locations() as $ll => $llabel ) { echo '<option value="'.esc_attr($ll).'"'.selected($log_loc,$ll,false).'>'.esc_html($llabel).'</option>'; } ?></select></label>
+                    <label>Van <input type="date" name="log_from" value="<?php echo esc_attr($log_from); ?>"></label>
+                    <label>Tot en met <input type="date" name="log_to" value="<?php echo esc_attr($log_to); ?>"></label>
+                    <label>Product <select name="log_product"><option value="0">Alle producten</option><?php foreach($products as $pid=>$pr){ echo '<option value="'.esc_attr($pid).'"'.selected($log_filter,$pid,false).'>'.esc_html($pr->get_name()).'</option>'; } ?></select></label>
+                    <button class="button button-primary">Zoeken</button>
+                    <?php if ( $log_searched ) : ?><a class="button" href="<?php echo esc_url( admin_url( 'admin.php?page=schreuder-bonusan-stock#sbp-log' ) ); ?>">Wissen</a><?php endif; ?>
+                    <a class="button" href="<?php echo esc_url( wp_nonce_url( admin_url('admin-post.php?action=sbp_stock_log_csv&log_product='.(int)$log_filter.'&log_location='.rawurlencode($log_loc).'&log_from='.rawurlencode($log_from).'&log_to='.rawurlencode($log_to)), 'sbp_stock_log_csv' ) ); ?>">Exporteer <?php echo $log_searched ? 'deze selectie' : 'volledige historie'; ?> (CSV)</a>
                 </form>
-                <?php if(empty($log)): ?><p>Nog geen voorraadmutaties.</p><?php else: ?>
+                <?php if ( ! $log_searched ): ?>
+                <?php elseif(empty($log)): ?><p>Geen mutaties gevonden voor deze selectie.</p><?php else: ?>
                 <table class="widefat striped"><thead><tr><th>Datum</th><th>Product</th><th>Locatie</th><th>Mutatie</th><th>Voor → na</th><th>Reden</th><th>Order</th><th>Notitie</th><th>Gebruiker</th></tr></thead><tbody>
                 <?php foreach($log as $e): $u = (int)$e['user_id'] ? get_userdata((int)$e['user_id']) : false; $d=(float)$e['delta']; ?>
                     <tr><td><?php echo esc_html( get_date_from_gmt( $e['created_gmt'], 'd-m-Y H:i' ) ); ?></td>
@@ -2936,7 +2948,7 @@ final class Schreuder_Bonusan_POS {
                     <td><?php echo !empty($e['order_id']) ? '<a href="'.esc_url($this->order_edit_url((int)$e['order_id'])).'">#'.esc_html($e['order_id']).'</a>' : '—'; ?></td>
                     <td><?php echo esc_html($e['note']); ?></td>
                     <td><?php echo esc_html($u ? $u->display_name : ( $e['user_id'] ? '#'.$e['user_id'] : 'systeem' )); ?></td></tr>
-                <?php endforeach; ?></tbody></table><p class="description">De laatste 200 regels. Gebruik de CSV-export voor de volledige historie.</p><?php endif; ?>
+                <?php endforeach; ?></tbody></table><p class="description"><?php echo count($log) >= 200 ? 'De laatste 200 regels van deze selectie. Gebruik de CSV-export voor alle regels.' : count($log).' regel(s).'; ?></p><?php endif; ?>
             </div>
         </div>
         <style>
@@ -3671,6 +3683,19 @@ final class Schreuder_Bonusan_POS {
         wp_send_json_success( array( 'message' => 'Locatie opgeslagen.' ) );
     }
 
+    /** Geldige datum (Y-m-d) uit invoer, anders ''. */
+    private function log_date( $v ) {
+        $v = trim( (string) $v );
+        return ( preg_match( '/^\d{4}-\d{2}-\d{2}$/', $v ) && false !== strtotime( $v ) ) ? $v : '';
+    }
+
+    /** Begin (00:00:00) of einde (23:59:59) van een lokale dag als UTC-tijdstip voor het grootboek; '' = geen grens. */
+    private function log_bound( $date, $end ) {
+        if ( '' === $date ) { return ''; }
+        $local = $date . ( $end ? ' 23:59:59' : ' 00:00:00' );
+        return function_exists( 'get_gmt_from_date' ) ? (string) get_gmt_from_date( $local ) : $local;
+    }
+
     private function reason_label( $reason ) {
         $map = array(
             'sale' => 'Verkoop', 'sale_edit' => 'Verkoop (order gewijzigd)', 'return' => 'Terugboeking', 'return_partial' => 'Gedeeltelijke terugboeking',
@@ -3717,6 +3742,10 @@ final class Schreuder_Bonusan_POS {
         if ( ! current_user_can( 'manage_woocommerce' ) ) { wp_die( 'Geen toegang.' ); }
         check_admin_referer( 'sbp_stock_log_csv' );
         $pid = absint( $_GET['log_product'] ?? 0 );
+        $loc = sanitize_key( (string)( $_GET['log_location'] ?? '' ) );
+        if ( ! isset( $this->stock_locations()[$loc] ) ) { $loc = ''; }
+        $from = $this->log_bound( $this->log_date( $_GET['log_from'] ?? '' ), false );
+        $to = $this->log_bound( $this->log_date( $_GET['log_to'] ?? '' ), true );
         nocache_headers();
         header( 'Content-Type: text/csv; charset=utf-8' );
         header( 'Content-Disposition: attachment; filename="voorraadlogboek-' . wp_date( 'Y-m-d' ) . '.csv"' );
@@ -3724,7 +3753,7 @@ final class Schreuder_Bonusan_POS {
         fwrite( $out, "\xEF\xBB\xBF" );
         fputcsv( $out, array( 'Datum (lokaal)', 'Datum (UTC)', 'Product-ID', 'SKU', 'Product', 'Locatie', 'Mutatie', 'Voorraad voor', 'Voorraad na', 'Reden', 'Order', 'Transfer-ID', 'Notitie', 'Gebruiker-ID' ), ';' );
         for ( $offset = 0; ; $offset += 1000 ) {
-            $rows = SBP_Ledger::log_rows( $pid, 1000, $offset );
+            $rows = SBP_Ledger::log_rows( $pid, 1000, $offset, $loc, $from, $to );
             if ( ! $rows ) { break; }
             foreach ( $rows as $e ) {
                 fputcsv( $out, array( get_date_from_gmt( $e['created_gmt'], 'Y-m-d H:i:s' ), $e['created_gmt'], $e['product_id'], $this->csv_safe( $e['sku'] ), $this->csv_safe( $e['product_name'] ), $e['location'], (float)$e['delta'], (float)$e['before_qty'], (float)$e['after_qty'], $e['reason'], $e['order_id'], $e['transfer_id'], $this->csv_safe( $e['note'] ), $e['user_id'] ), ';' );

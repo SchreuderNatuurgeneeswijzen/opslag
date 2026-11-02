@@ -3,7 +3,7 @@ Contributors: schreuder
 Requires at least: 6.2
 Requires PHP: 8.0
 Requires Plugins: woocommerce
-Stable tag: 1.21.0
+Stable tag: 1.21.1
 
 Maakt per locatie een Bonusan Excel-bestelling vanuit WooCommerce/YITH POS-orders.
 
@@ -50,6 +50,9 @@ Automatisch blind verzenden bij het sluiten van een kassa is bewust niet geactiv
 
 
 == Changelog ==
+
+= 1.21.1 =
+* Voorraadlogboek staat standaard dicht. Zoek op locatie, periode (van / tot en met) en/of product; pas dan worden de mutaties opgehaald en getoond (maximaal 200 regels). De CSV-export volgt dezelfde selectie, of geeft de volledige historie zonder selectie. Ongeldige datums of locaties tellen niet als zoekopdracht.
 
 = 1.21.0 =
 * Per locatie pas meedoen nadat er voorraad is ingevuld. Een locatie telt pas mee zodra er voor dat product voor die locatie een voorraad is ingevuld (telling, correctie, levering, Excel-import of overboeking naar die locatie). Tot die tijd: geen afboeking van kassaverkopen (dus geen negatieve voorraad), geen kleurmeldingen (rood/oranje/geel), geen e-mailsignaal, geen bestelvoorstel en geen voorraadregel op de turflijst voor die locatie. Zodra je de voorraad invult, geldt alles vanaf dat moment; eerdere verkopen worden niet achteraf afgeboekt.
